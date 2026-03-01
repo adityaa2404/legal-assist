@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      # Pass build args if needed, though they are usually for build time.
+      # Runtime env vars for Nginx or client-side are tricky in Docker.
+      # Vite bakes env vars at build time.
+      # So we must provide VITE_API_BASE_URL during build.
+      args:
+        VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017
+      - MONGO_DB_NAME=legal-assist
+      # Secrets should be passed via .env file or environment
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - MAX_FILE_SIZE_MB=20
+      - SESSION_TTL_SECONDS=7200
+      - CORS_ORIGINS=http://localhost,http://localhost:80,https://legal-assist.ai
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS}
+
+volumes:
+  mongo_data:

@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+motor
+pymongo
+google-genai
+PyMuPDF
+python-docx
+python-jose[cryptography]
+python-multipart
+pydantic
+pydantic-settings
+slowapi
+pinecone
