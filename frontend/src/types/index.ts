@@ -7,6 +7,7 @@ export interface Session {
         filename: string;
         page_count: number;
         size_bytes: number;
+        needs_ocr?: boolean;
         uploaded_at?: string;
     };
     anonymized_text?: string;
@@ -17,7 +18,9 @@ export interface UploadResponse {
     filename: string;
     page_count: number;
     detected_pii_count: number;
+    needs_ocr: boolean;
     expires_in_seconds: number;
+    htoc_sections?: number; // Number of HTOC tree sections identified
 }
 
 export interface Clause {
@@ -56,6 +59,37 @@ export interface ChatRequest {
     history: ChatMessage[];
 }
 
+export interface SourceSection {
+    title: string;
+    pages: string;
+    node_id: string;
+}
+
 export interface ChatResponse {
     response: string;
+    source_sections?: SourceSection[];
+}
+
+// Auth types
+export interface UserResponse {
+    email: string;
+    full_name: string;
+    created_at: string;
+}
+
+export interface TokenResponse {
+    access_token: string;
+    token_type: string;
+    user: UserResponse;
+}
+
+export interface RegisterRequest {
+    email: string;
+    password: string;
+    full_name: string;
+}
+
+export interface LoginRequest {
+    email: string;
+    password: string;
 }

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /d/legal-assist/backend/app/api/v1 -name *.py)",
+      "Bash(curl -s https://api.github.com/repos/VectifyAI/PageIndex)",
+      "Bash(curl -s https://raw.githubusercontent.com/VectifyAI/PageIndex/main/README.md)"
+    ]
+  }
+}

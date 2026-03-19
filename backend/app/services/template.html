@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Legal Analysis — {{ document_type | default('Document') }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 22mm 18mm 24mm 18mm;
+            @bottom-left {
+                content: "legal-assist AI";
+                font-size: 7.5pt;
+                color: #94a3b8;
+                font-family: "Inter", "Segoe UI", Arial, sans-serif;
+                font-weight: 600;
+                letter-spacing: 0.5px;
+            }
+            @bottom-right {
+                content: "Page " counter(page) " of " counter(pages);
+                font-size: 7.5pt;
+                color: #94a3b8;
+                font-family: "Inter", "Segoe UI", Arial, sans-serif;
+            }
+        }
+
+        :root {
+            --text: #0f172a;
+            --text-sec: #475569;
+            --text-muted: #94a3b8;
+            --border: #e2e8f0;
+            --border-dark: #cbd5e1;
+            --card: #f8fafc;
+            --red: #dc2626;
+            --amber: #d97706;
+            --green: #16a34a;
+            --blue: #2563eb;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: "Inter", "Segoe UI", -apple-system, Arial, sans-serif;
+            color: var(--text);
+            font-size: 10pt;
+            line-height: 1.6;
+        }
+
+        /* ─── HEADER ─── */
+
+        .header {
+            padding-bottom: 16px;
+            border-bottom: 2px solid var(--text);
+            margin-bottom: 28px;
+        }
+        .header .doc-type {
+            font-size: 8.5pt;
+            font-weight: 700;
+            color: var(--blue);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+        .header h1 {
+            font-size: 26pt;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            line-height: 1.15;
+            margin-bottom: 8px;
+        }
+        .header-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 9pt;
+            color: var(--text-sec);
+        }
+        .header-meta strong { color: var(--text); }
+
+        /* ─── SCORE SECTION ─── */
+
+        .score-section {
+            padding: 20px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 28px;
+        }
+        .score-section .title {
+            font-size: 9pt;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+        .score-row {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 14px;
+        }
+        .score-big {
+            font-size: 36pt;
+            font-weight: 800;
+            line-height: 1;
+        }
+        .score-big small {
+            font-size: 14pt;
+            font-weight: 400;
+            color: var(--text-muted);
+        }
+        .score-counts {
+            display: flex;
+            gap: 16px;
+        }
+        .score-count {
+            text-align: center;
+        }
+        .score-count .num {
+            font-size: 18pt;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+        .score-count .lbl {
+            font-size: 7pt;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+        .score-count.hi .num { color: var(--red); }
+        .score-count.md .num { color: var(--amber); }
+        .score-count.lo .num { color: var(--green); }
+
+        .bar-track {
+            width: 100%;
+            height: 8px;
+            background: var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .bar-fill { height: 100%; border-radius: 4px; }
+
+        /* ─── SECTIONS ─── */
+
+        h2 {
+            font-size: 14pt;
+            font-weight: 700;
+            color: var(--text);
+            margin: 32px 0 14px 0;
+            padding-bottom: 8px;
+            border-bottom: 1.5px solid var(--border);
+            letter-spacing: 0.2px;
+        }
+
+        h3 {
+            font-size: 11pt;
+            font-weight: 600;
+            color: var(--text);
+            margin: 20px 0 10px 0;
+        }
+
+        .body-text {
+            font-size: 10.5pt;
+            color: var(--text-sec);
+            line-height: 1.75;
+            text-align: justify;
+            margin-bottom: 16px;
+        }
+
+        /* Key terms */
+        .terms-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 8px 0 16px 0;
+        }
+        .term-tag {
+            display: inline-block;
+            background: #eff6ff;
+            color: #1e40af;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 9pt;
+            font-weight: 600;
+            border: 1px solid #dbeafe;
+            letter-spacing: 0.2px;
+        }
+
+        /* Parties */
+        .parties-line {
+            font-size: 9.5pt;
+            color: var(--text-sec);
+            margin-bottom: 8px;
+        }
+        .parties-line strong { color: var(--text); }
+
+        /* Risk lists */
+        .risk-list {
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            margin: 10px 0 20px 0;
+        }
+        .risk-list p {
+            padding: 10px 14px;
+            margin: 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 10pt;
+            line-height: 1.6;
+            color: var(--text-sec);
+        }
+        .risk-list p:last-child { border-bottom: none; }
+        .risk-list.high p { border-left: 4px solid var(--red); background: #fef2f2; }
+        .risk-list.medium p { border-left: 4px solid var(--amber); background: #fffbeb; }
+        .risk-list.low p { border-left: 4px solid var(--green); background: #f0fdf4; }
+
+        /* Clause items */
+        .clause-card {
+            margin: 12px 0;
+            padding: 14px 18px;
+            background: var(--card);
+            border-left: 4px solid var(--blue);
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--blue);
+        }
+        .clause-card .clause-title {
+            font-size: 9pt;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--blue);
+            margin-bottom: 6px;
+        }
+        .clause-card .clause-text {
+            font-size: 10pt;
+            color: var(--text-sec);
+            line-height: 1.65;
+            margin-bottom: 8px;
+        }
+        .clause-card .clause-explain {
+            font-size: 9.5pt;
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        /* Obligations */
+        .ob-list {
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            margin: 10px 0 16px 0;
+        }
+        .ob-list p {
+            padding: 8px 14px;
+            margin: 0;
+            font-size: 9.5pt;
+            color: var(--text-sec);
+            border-bottom: 1px solid var(--border);
+            line-height: 1.5;
+        }
+        .ob-list p:last-child { border-bottom: none; }
+        .ob-list p::before {
+            content: "— ";
+            color: var(--text-muted);
+        }
+
+        /* Missing clauses */
+        .miss-pill {
+            display: inline-block;
+            background: #fef2f2;
+            color: #991b1b;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 8.5pt;
+            font-weight: 600;
+            margin: 3px 4px;
+            border: 1px solid #fecaca;
+        }
+
+        /* Footer */
+        .report-footer {
+            margin-top: 36px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            font-size: 8pt;
+            color: var(--text-muted);
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ════ HEADER ════ -->
+
+<div class="header">
+    <div class="doc-type">{{ document_type | default('Legal Document') }}</div>
+    <h1>Legal Analysis Report</h1>
+    <div class="header-meta">
+        <span><strong>{{ doc_id | default('') }}</strong></span>
+        <span>{{ current_ist_time | default('') }}</span>
+    </div>
+</div>
+
+<!-- ════ RISK SCORE ════ -->
+
+<div class="score-section">
+    <div class="title">Overall Risk Assessment</div>
+    <div class="score-row">
+        <div class="score-big" style="color: {{ bar_color }};">
+            {{ overall_risk_score | default(0) }}<small>/100</small>
+        </div>
+        <div class="score-counts">
+            <div class="score-count hi">
+                <div class="num">{{ high_count | default(0) }}</div>
+                <div class="lbl">High</div>
+            </div>
+            <div class="score-count md">
+                <div class="num">{{ medium_count | default(0) }}</div>
+                <div class="lbl">Medium</div>
+            </div>
+            <div class="score-count lo">
+                <div class="num">{{ low_count | default(0) }}</div>
+                <div class="lbl">Low</div>
+            </div>
+        </div>
+    </div>
+    <div class="bar-track">
+        <div class="bar-fill" style="width:{{ danger_score_pct | default(0) }}%; background:{{ bar_color | default('#2563eb') }};"></div>
+    </div>
+</div>
+
+<!-- ════ PARTIES ════ -->
+
+{% if parties %}
+<div class="parties-line">
+    <strong>Parties:</strong>
+    {% for p in parties %}{{ p }}{% if not loop.last %} &middot; {% endif %}{% endfor %}
+</div>
+{% endif %}
+
+<!-- ════ SUMMARY ════ -->
+
+<h2>Executive Summary</h2>
+<p class="body-text">{{ summary_text | default('No summary provided.') }}</p>
+
+<!-- ════ KEY TERMS ════ -->
+
+{% if key_terms %}
+<h2>Key Terms</h2>
+<div class="terms-grid">
+    {% for term in key_terms %}
+    <span class="term-tag">{{ term }}</span>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ════ RISKS ════ -->
+
+<h2>Risk Analysis</h2>
+
+{% if risks.counts.High | default(0) > 0 %}
+<h3>High Risk ({{ risks.counts.High }})</h3>
+<div class="risk-list high">
+    {% for clause in risks.top_clauses.High | default([]) %}
+    <p>{{ clause }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if risks.counts.Medium | default(0) > 0 %}
+<h3>Medium Risk ({{ risks.counts.Medium }})</h3>
+<div class="risk-list medium">
+    {% for clause in risks.top_clauses.Medium | default([]) %}
+    <p>{{ clause }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if risks.counts.Low | default(0) > 0 %}
+<h3>Low Risk ({{ risks.counts.Low }})</h3>
+<div class="risk-list low">
+    {% for clause in risks.top_clauses.Low | default([]) %}
+    <p>{{ clause }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if total_risks == 0 %}
+<div class="risk-list low"><p>No significant risks identified in this document.</p></div>
+{% endif %}
+
+<!-- ════ KEY CLAUSES ════ -->
+
+<h2>Key Clause Analysis</h2>
+{% if top_clauses %}
+    {% for item in top_clauses %}
+    <div class="clause-card">
+        <div class="clause-title">{{ item.clause | default('Untitled') }}</div>
+        <div class="clause-explain">{{ item.explanation | default('') }}</div>
+    </div>
+    {% endfor %}
+{% else %}
+    <p class="body-text">No key clauses were extracted.</p>
+{% endif %}
+
+<!-- ════ OBLIGATIONS ════ -->
+
+{% if obligations %}
+<h2>Obligations</h2>
+<div class="ob-list">
+    {% for ob in obligations %}
+    <p>{{ ob }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ════ MISSING CLAUSES ════ -->
+
+{% if missing_clauses %}
+<h2>Missing Clauses</h2>
+<div>
+    {% for m in missing_clauses %}
+    <span class="miss-pill">{{ m }}</span>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ════ FOOTER ════ -->
+
+<div class="report-footer">
+    Generated {{ current_ist_time | default('') }} &mdash; legal-assist AI &middot; Confidential
+</div>
+
+</body>
+</html>

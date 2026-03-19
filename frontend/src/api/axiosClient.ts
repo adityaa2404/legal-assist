@@ -10,9 +10,29 @@ const axiosClient = axios.create({
     },
 });
 
-// Add interceptor to include session ID if available in specific calls?
-// Or we pass headers explicitly.
-// The user spec says session_id is sent as header.
-// We can manage this dynamically or pass config per request.
+// Attach JWT token to every request if available
+axiosClient.interceptors.request.use((config) => {
+    const token = localStorage.getItem('lawbuddy_token');
+    if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+});
+
+// Redirect to login on 401
+axiosClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response?.status === 401) {
+            localStorage.removeItem('lawbuddy_token');
+            localStorage.removeItem('lawbuddy_user');
+            // Only redirect if not already on auth page
+            if (!window.location.pathname.startsWith('/auth')) {
+                window.location.href = '/auth';
+            }
+        }
+        return Promise.reject(error);
+    }
+);
 
 export default axiosClient;

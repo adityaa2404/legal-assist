@@ -1,52 +1,22 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from app.services.session_service import SessionService
 from app.services.pii_anonymizer import PIIAnonymizer
 from app.services.gemini_client import GeminiClient
-from app.services.pinecone_service import PineconeService
-from app.core.dependencies import get_session_service, get_pii_service, get_gemini_client, get_pinecone_service
+from app.services.tree_search import TreeSearchService
+from app.core.dependencies import (
+    get_session_service, get_pii_service, get_gemini_client,
+    get_current_user, get_tree_search,
+)
 import logging
 from app.models.analysis import AnalysisResponse
+from app.services.report_generator import create_pdf_from_analysis
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.post("/analyze", response_model=AnalysisResponse)
-async def analyze_document(
-    session_id: str = Header(..., alias="X-Session-ID"),
-    analysis_type: str = Query(default='full'),
-    session_service: SessionService = Depends(get_session_service),
-    pii_service: PIIAnonymizer = Depends(get_pii_service),
-    gemini: GeminiClient = Depends(get_gemini_client),
-    pinecone_service: PineconeService = Depends(get_pinecone_service),
-):
-    # Note: The user spec said session_id: str = Header(...) which maps to 'session-id' header by default in FastAPI 
-    # but let's stick to what's common or clarify. The spec example usage didn't show the header name explicitly 
-    # other than `session_id: str = Header(...)`. 
-    # If I use `Header(...)` the header name is `session-id`.
-    
-    # 1. Retrieve session (has PII mapping + extracted text)
-    session = await session_service.get(session_id)
-    if not session:
-        raise HTTPException(404, "Session expired or not found")
 
-    # 2. Text is already anonymized from upload step
-    anonymized_text = session.anonymized_text
-    if not anonymized_text:
-        raise HTTPException(400, "No document text found in session")
-
-    # 3. Send to Gemini
-    try:
-        raw_result = await gemini.analyze_document(
-            anonymized_text, analysis_type
-        )
-    except Exception as e:
-        raise HTTPException(500, f"Analysis failed: {str(e)}")
-
-    # 4. De-anonymize the response
-    result = pii_service.deanonymize_dict(
-        raw_result, session.pii_mapping
-    )
-
-    # 5. Normalize AI output (Safety Layer)
+def _normalize_result(result: dict) -> dict:
     if isinstance(result.get("obligations"), str):
         result["obligations"] = [{"description": result["obligations"]}]
     elif not isinstance(result.get("obligations"), list):
@@ -64,13 +34,103 @@ async def analyze_document(
             if isinstance(party, str):
                 result["parties"][i] = {"role": "Party", "name": party}
 
-    # 6. Enrich clauses with rulebook references from Pinecone
-    try:
-        clause_texts = [c["clause_text"] for c in result.get("key_clauses", [])]
-        references = await pinecone_service.get_references(clause_texts)
-        for clause, refs in zip(result["key_clauses"], references):
-            clause["rulebook_references"] = refs
-    except Exception as e:
-        logging.warning(f"Pinecone enrichment failed (non-fatal): {e}")
+    return result
 
+
+async def _get_or_run_analysis(
+    session_id: str,
+    analysis_type: str,
+    session_service: SessionService,
+    pii_service: PIIAnonymizer,
+    gemini: GeminiClient,
+    tree_search: TreeSearchService = None,
+) -> dict:
+    """Return cached analysis if available, otherwise run Gemini and cache."""
+    session = await session_service.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session expired or not found")
+
+    anonymized_text = session.anonymized_text
+    if not anonymized_text:
+        raise HTTPException(400, "No document text found in session")
+
+    # Check cache first
+    cached = await session_service.get_analysis(session_id, analysis_type)
+    if cached:
+        return cached
+
+    # Build structured context from HTOC if available
+    document_context = anonymized_text
+    has_htoc = session.htoc_tree and session.page_texts
+
+    if has_htoc and tree_search:
+        try:
+            # Use tree-structured context: sections are organized hierarchically
+            # with headers and page references for better analysis
+            structured_context = await tree_search.search_for_analysis(
+                tree=session.htoc_tree,
+                page_texts=session.page_texts,
+                gemini_client=gemini,
+            )
+            document_context = structured_context
+            logger.info("Using HTOC-structured context for analysis")
+        except Exception as e:
+            logger.warning(f"HTOC analysis context failed, using full text: {e}")
+
+    # Run Gemini
+    try:
+        raw_result = await gemini.analyze_document(document_context, analysis_type)
+    except Exception as e:
+        raise HTTPException(500, f"Analysis failed: {str(e)}")
+
+    result = pii_service.deanonymize_dict(raw_result, session.pii_mapping)
+    result = _normalize_result(result)
+
+    # Cache for future use (report endpoint)
+    await session_service.save_analysis(session_id, analysis_type, result)
+
+    return result
+
+
+@router.post("/analyze", response_model=AnalysisResponse)
+async def analyze_document(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    analysis_type: str = Query(default='full'),
+    current_user: str = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+    pii_service: PIIAnonymizer = Depends(get_pii_service),
+    gemini: GeminiClient = Depends(get_gemini_client),
+    tree_search: TreeSearchService = Depends(get_tree_search),
+):
+    result = await _get_or_run_analysis(
+        session_id, analysis_type, session_service, pii_service, gemini, tree_search
+    )
     return AnalysisResponse(**result)
+
+
+@router.get("/analyze/report")
+async def get_analysis_report(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    analysis_type: str = Query(default='full'),
+    current_user: str = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+    pii_service: PIIAnonymizer = Depends(get_pii_service),
+    gemini: GeminiClient = Depends(get_gemini_client),
+    tree_search: TreeSearchService = Depends(get_tree_search),
+):
+    result = await _get_or_run_analysis(
+        session_id, analysis_type, session_service, pii_service, gemini, tree_search
+    )
+
+    filename = "Legal Analysis Report"
+    try:
+        pdf_bytes = create_pdf_from_analysis(result, filename, analysis_type)
+    except Exception as e:
+        logging.error(f"PDF generation failed: {e}")
+        raise HTTPException(500, f"PDF report generation failed: {str(e)}")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=report_{session_id}.pdf"}
+    )

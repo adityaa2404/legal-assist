@@ -5,16 +5,11 @@ class Party(BaseModel):
     role: str
     name: str
 
-class RulebookReference(BaseModel):
-    text: str
-    score: float
-
 class Clause(BaseModel):
     clause_title: str
     clause_text: str
     plain_english: str
     importance: str
-    rulebook_references: Optional[List[RulebookReference]] = []
 
 class Risk(BaseModel):
     risk_title: str

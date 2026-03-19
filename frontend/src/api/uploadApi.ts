@@ -7,8 +7,8 @@ export const uploadApi = {
             headers: {
                 'Content-Type': 'multipart/form-data',
             },
-            // Increase timeout for large files if needed
-            timeout: 30000,
+            // Longer timeout for scanned docs (Sarvam AI OCR)
+            timeout: 120000,
         });
         return data;
     }

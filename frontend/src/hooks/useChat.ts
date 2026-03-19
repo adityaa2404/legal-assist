@@ -1,9 +1,13 @@
 import { useState, useCallback } from 'react';
-import { ChatMessage } from '@/types';
+import { ChatMessage, SourceSection } from '@/types';
 import { chatApi } from '@/api/chatApi';
 
+export interface ChatMessageWithSources extends ChatMessage {
+    source_sections?: SourceSection[];
+}
+
 export const useChat = (sessionId: string | null) => {
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [messages, setMessages] = useState<ChatMessageWithSources[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -14,24 +18,24 @@ export const useChat = (sessionId: string | null) => {
         setError(null);
 
         // Optimistic update
-        const userMessage: ChatMessage = { role: 'user', content };
+        const userMessage: ChatMessageWithSources = { role: 'user', content };
         setMessages(prev => [...prev, userMessage]);
 
         try {
             const response = await chatApi.chat(sessionId, {
                 message: content,
-                history: messages // Send history up to this point
+                history: messages.map(m => ({ role: m.role, content: m.content })),
             });
 
-            const assistantMessage: ChatMessage = {
+            const assistantMessage: ChatMessageWithSources = {
                 role: 'assistant',
-                content: response.response
+                content: response.response,
+                source_sections: response.source_sections,
             };
 
             setMessages(prev => [...prev, assistantMessage]);
         } catch (err: any) {
             setError(err.message || 'Failed to send message');
-            // Optionally rollback optimistic update or show error
         } finally {
             setIsLoading(false);
         }

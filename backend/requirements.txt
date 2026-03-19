@@ -10,4 +10,13 @@ python-multipart
 pydantic
 pydantic-settings
 slowapi
-pinecone
+passlib[bcrypt]
+bcrypt==4.0.1
+email-validator
+spacy
+weasyprint
+pytz
+matplotlib
+jinja2
+tiktoken
+sarvamai

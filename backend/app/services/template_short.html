@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Summary Report — {{ document_type | default('Legal Document') }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 20mm 18mm 22mm 18mm;
+            @bottom-center {
+                content: "Page " counter(page) " of " counter(pages);
+                font-size: 7.5pt;
+                color: #94a3b8;
+                font-family: "Inter", "Segoe UI", Arial, sans-serif;
+            }
+        }
+
+        :root {
+            --text: #0f172a;
+            --text-sec: #475569;
+            --text-muted: #94a3b8;
+            --border: #e2e8f0;
+            --card: #f8fafc;
+            --red: #dc2626;
+            --amber: #d97706;
+            --green: #16a34a;
+            --blue: #2563eb;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: "Inter", "Segoe UI", Arial, sans-serif;
+            color: var(--text);
+            font-size: 9pt;
+            line-height: 1.55;
+        }
+
+        /* ─── PAGE 1: Header + Score + Summary ─── */
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding-bottom: 14px;
+            border-bottom: 2px solid var(--text);
+            margin-bottom: 18px;
+        }
+        .header-left h1 {
+            font-size: 20pt;
+            font-weight: 800;
+            letter-spacing: -0.3px;
+            color: var(--text);
+            margin-bottom: 3px;
+        }
+        .header-left .doc-type {
+            font-size: 9pt;
+            font-weight: 600;
+            color: var(--blue);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+        .header-right {
+            text-align: right;
+            font-size: 7.5pt;
+            color: var(--text-sec);
+            line-height: 1.6;
+        }
+        .header-right strong {
+            display: block;
+            font-size: 8pt;
+            color: var(--text);
+        }
+
+        /* Score strip */
+        .score-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .score-card {
+            flex: 1;
+            padding: 12px 10px;
+            border-radius: 6px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            text-align: center;
+        }
+        .score-card .value {
+            font-size: 22pt;
+            font-weight: 800;
+            line-height: 1.1;
+        }
+        .score-card .label {
+            font-size: 6.5pt;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .score-card.main { border-bottom: 3px solid var(--text); }
+        .score-card.hi { border-bottom: 3px solid var(--red); }
+        .score-card.hi .value { color: var(--red); }
+        .score-card.md { border-bottom: 3px solid var(--amber); }
+        .score-card.md .value { color: var(--amber); }
+        .score-card.lo { border-bottom: 3px solid var(--green); }
+        .score-card.lo .value { color: var(--green); }
+
+        /* Progress bar */
+        .bar-track {
+            width: 100%;
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+
+        /* Section title */
+        .sec {
+            font-size: 10pt;
+            font-weight: 700;
+            color: var(--text);
+            margin: 18px 0 8px 0;
+            padding-bottom: 5px;
+            border-bottom: 1px solid var(--border);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .sec:first-of-type { margin-top: 0; }
+
+        .body-text {
+            font-size: 9pt;
+            color: var(--text-sec);
+            line-height: 1.65;
+            text-align: justify;
+            margin-bottom: 10px;
+        }
+
+        /* Key terms tags */
+        .tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 8px;
+        }
+        .tag {
+            display: inline-block;
+            background: #eff6ff;
+            color: #1e40af;
+            padding: 3px 9px;
+            border-radius: 4px;
+            font-size: 7.5pt;
+            font-weight: 600;
+            border: 1px solid #dbeafe;
+            letter-spacing: 0.2px;
+        }
+
+        /* Parties */
+        .parties {
+            font-size: 8pt;
+            color: var(--text-sec);
+            margin-bottom: 6px;
+        }
+        .parties strong { color: var(--text); }
+
+        /* ─── PAGE 2: Risks + Clauses + Obligations ─── */
+
+        .page-break { page-break-before: always; }
+
+        /* Two columns */
+        .cols { display: flex; gap: 14px; }
+        .col { flex: 1; }
+
+        /* Risk items */
+        .risk-item {
+            padding: 6px 8px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-size: 8pt;
+            line-height: 1.45;
+            color: var(--text-sec);
+        }
+        .risk-item.hi {
+            background: #fef2f2;
+            border-left: 3px solid var(--red);
+        }
+        .risk-item.md {
+            background: #fffbeb;
+            border-left: 3px solid var(--amber);
+        }
+        .risk-item.lo {
+            background: #f0fdf4;
+            border-left: 3px solid var(--green);
+        }
+        .risk-item strong {
+            font-size: 7pt;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: var(--text);
+        }
+        .risk-item .rec {
+            font-size: 7pt;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        /* Clause items */
+        .clause-item {
+            padding: 6px 8px;
+            margin-bottom: 4px;
+            background: var(--card);
+            border-left: 3px solid var(--blue);
+            border-radius: 4px;
+            font-size: 8pt;
+            line-height: 1.45;
+        }
+        .clause-item strong {
+            font-size: 7.5pt;
+            color: var(--blue);
+            display: block;
+            margin-bottom: 1px;
+        }
+        .clause-item .explain {
+            color: var(--text-sec);
+        }
+
+        /* Obligations */
+        .ob-item {
+            font-size: 8pt;
+            color: var(--text-sec);
+            padding: 2px 0;
+            padding-left: 10px;
+            position: relative;
+        }
+        .ob-item::before {
+            content: "—";
+            position: absolute;
+            left: 0;
+            color: var(--text-muted);
+        }
+
+        /* Missing clause pills */
+        .miss-pill {
+            display: inline-block;
+            background: #fef2f2;
+            color: #991b1b;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 7pt;
+            font-weight: 600;
+            margin: 2px 3px;
+            border: 1px solid #fecaca;
+        }
+
+        /* Footer */
+        .foot {
+            margin-top: 14px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+            font-size: 7pt;
+            color: var(--text-muted);
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ════════════ PAGE 1 ════════════ -->
+
+<div class="header">
+    <div class="header-left">
+        <div class="doc-type">{{ document_type | default('Legal Document') }}</div>
+        <h1>Summary Report</h1>
+    </div>
+    <div class="header-right">
+        <strong>{{ doc_id | default('') }}</strong>
+        {{ current_ist_time | default('') }}
+    </div>
+</div>
+
+<!-- Score cards -->
+<div class="score-row">
+    <div class="score-card main">
+        <div class="value" style="color: {{ bar_color }};">{{ overall_risk_score | default(0) }}</div>
+        <div class="label">Risk Score / 100</div>
+    </div>
+    <div class="score-card hi">
+        <div class="value">{{ high_count | default(0) }}</div>
+        <div class="label">High</div>
+    </div>
+    <div class="score-card md">
+        <div class="value">{{ medium_count | default(0) }}</div>
+        <div class="label">Medium</div>
+    </div>
+    <div class="score-card lo">
+        <div class="value">{{ low_count | default(0) }}</div>
+        <div class="label">Low</div>
+    </div>
+</div>
+
+<div class="bar-track">
+    <div class="bar-fill" style="width:{{ danger_score_pct | default(0) }}%; background:{{ bar_color | default('#2563eb') }};"></div>
+</div>
+
+<!-- Parties -->
+{% if parties %}
+<div class="parties">
+    <strong>Parties:</strong>
+    {% for p in parties %}{{ p }}{% if not loop.last %} &middot; {% endif %}{% endfor %}
+</div>
+{% endif %}
+
+<!-- Summary -->
+<div class="sec">Executive Summary</div>
+<div class="body-text">{{ summary_text | default('No summary available.') }}</div>
+
+<!-- Key Terms -->
+{% if key_terms %}
+<div class="sec">Key Terms</div>
+<div class="tags">
+    {% for term in key_terms %}<span class="tag">{{ term }}</span>{% endfor %}
+</div>
+{% endif %}
+
+<!-- Missing Clauses on page 1 if present -->
+{% if missing_clauses %}
+<div class="sec">Missing Clauses</div>
+<div>{% for m in missing_clauses %}<span class="miss-pill">{{ m }}</span>{% endfor %}</div>
+{% endif %}
+
+
+<!-- ════════════ PAGE 2 ════════════ -->
+
+<div class="page-break"></div>
+
+<div class="header" style="margin-bottom: 14px;">
+    <div class="header-left">
+        <div class="doc-type">{{ document_type | default('Legal Document') }}</div>
+        <h1 style="font-size: 16pt;">Detailed Findings</h1>
+    </div>
+    <div class="header-right">
+        {{ current_ist_time | default('') }}
+    </div>
+</div>
+
+<!-- Two columns: Risks + Clauses -->
+<div class="cols">
+    <div class="col">
+        <div class="sec" style="margin-top: 0;">Risks ({{ total_risks | default(0) }})</div>
+        {% for r in risks.top_clauses.High | default([]) %}
+        <div class="risk-item hi"><strong>High</strong> {{ r }}</div>
+        {% endfor %}
+        {% for r in risks.top_clauses.Medium | default([]) %}
+        <div class="risk-item md"><strong>Med</strong> {{ r }}</div>
+        {% endfor %}
+        {% for r in risks.top_clauses.Low | default([]) %}
+        <div class="risk-item lo"><strong>Low</strong> {{ r }}</div>
+        {% endfor %}
+        {% if total_risks == 0 %}
+        <div class="risk-item lo">No significant risks identified.</div>
+        {% endif %}
+    </div>
+    <div class="col">
+        <div class="sec" style="margin-top: 0;">Key Clauses ({{ top_clauses | length }})</div>
+        {% for item in top_clauses %}
+        <div class="clause-item">
+            <strong>{{ item.clause | truncate(100) }}</strong>
+            <div class="explain">{{ item.explanation | truncate(120) }}</div>
+        </div>
+        {% endfor %}
+        {% if not top_clauses %}
+        <div class="clause-item">No key clauses extracted.</div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Obligations -->
+{% if obligations %}
+<div class="sec">Obligations</div>
+{% for ob in obligations %}
+<div class="ob-item">{{ ob }}</div>
+{% endfor %}
+{% endif %}
+
+<div class="foot">Generated {{ current_ist_time | default('') }} &mdash; legal-assist AI &middot; Confidential</div>
+
+</body>
+</html>

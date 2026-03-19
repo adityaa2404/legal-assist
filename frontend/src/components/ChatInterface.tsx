@@ -1,10 +1,12 @@
 import React, { useRef, useEffect } from 'react';
 import { useChat } from '@/hooks/useChat';
 import { useSession } from '@/hooks/useSession';
-import { Send, User, Bot, Loader2 } from 'lucide-react';
+import { Send, User, Bot, Loader2, FileText } from 'lucide-react';
 import Markdown from 'react-markdown';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
+import { Badge } from './ui/badge';
 import { cn } from '@/lib/utils';
-
 
 const ChatInterface: React.FC = () => {
     const { session } = useSession();
@@ -21,33 +23,43 @@ const ChatInterface: React.FC = () => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!inputRef.current?.value.trim() || isLoading) return;
-
         sendMessage(inputRef.current.value);
         inputRef.current.value = '';
     };
 
     if (!session) {
-        return <div className="p-4 text-center text-gray-400">Please upload a document to start chatting.</div>;
+        return (
+            <Card className="h-full flex items-center justify-center">
+                <p className="text-sm text-muted-foreground">Upload a document to start chatting.</p>
+            </Card>
+        );
     }
 
     return (
-        <div className="flex flex-col h-full bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden">
-            <div className="p-4 border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
-                <h3 className="font-semibold text-gray-200">Chat with Document</h3>
-                <p className="text-xs text-gray-500">Ask questions about clauses, risks, or specific details.</p>
+        <Card className="flex flex-col h-full overflow-hidden">
+            {/* Header */}
+            <div className="p-3 sm:p-4 border-b">
+                <p className="text-sm font-medium">Chat with Document</p>
+                <p className="text-xs text-muted-foreground">HTOC vectorless RAG</p>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth" ref={scrollRef}>
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 custom-scrollbar" ref={scrollRef}>
                 {messages.length === 0 && (
-                    <div className="text-center text-gray-500 mt-10">
-                        <Bot className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                        <p>Ask anything about this document.</p>
-                        <div className="flex flex-wrap gap-2 justify-center mt-4 text-xs">
-                            {['Is there a termination clause?', 'What represent the parties?', ' Summarize liabilities'].map(q => (
+                    <div className="text-center text-muted-foreground mt-8 sm:mt-12 space-y-4">
+                        <Bot className="w-8 h-8 mx-auto opacity-30" />
+                        <p className="text-sm">Ask anything about this document.</p>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                            {['Termination clause?', 'Who are the parties?', 'Summarize liabilities'].map(q => (
                                 <button
                                     key={q}
-                                    onClick={() => { if (inputRef.current) { inputRef.current.value = q; handleSubmit({ preventDefault: () => { } } as any); } }}
-                                    className="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded-full border border-gray-700 transition"
+                                    onClick={() => {
+                                        if (inputRef.current) {
+                                            inputRef.current.value = q;
+                                            handleSubmit({ preventDefault: () => {} } as any);
+                                        }
+                                    }}
+                                    className="px-3 py-1.5 text-xs border rounded-full text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors cursor-pointer"
                                 >
                                     {q}
                                 </button>
@@ -60,76 +72,105 @@ const ChatInterface: React.FC = () => {
                     <div
                         key={idx}
                         className={cn(
-                            "flex gap-3 max-w-[85%]",
-                            msg.role === 'user' ? "ml-auto flex-row-reverse" : "mr-auto"
+                            "flex gap-2.5 animate-fade-in",
+                            msg.role === 'user'
+                                ? "ml-auto flex-row-reverse max-w-[88%] sm:max-w-[80%]"
+                                : "mr-auto max-w-[88%] sm:max-w-[80%]"
                         )}
                     >
                         <div className={cn(
-                            "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
-                            msg.role === 'user' ? "bg-blue-600" : "bg-purple-600"
+                            "w-7 h-7 rounded-full flex items-center justify-center shrink-0 border",
+                            msg.role === 'user'
+                                ? "bg-primary/10 border-primary/20"
+                                : "bg-muted border-border"
                         )}>
-                            {msg.role === 'user' ? <User className="w-4 h-4 text-white" /> : <Bot className="w-4 h-4 text-white" />}
+                            {msg.role === 'user'
+                                ? <User className="w-3.5 h-3.5 text-primary" />
+                                : <Bot className="w-3.5 h-3.5 text-muted-foreground" />
+                            }
                         </div>
 
                         <div className={cn(
-                            "p-3 rounded-2xl text-sm leading-relaxed",
+                            "px-3 py-2 rounded-xl text-sm leading-relaxed",
                             msg.role === 'user'
-                                ? "bg-blue-600 text-white rounded-tr-none"
-                                : "bg-gray-800 text-gray-200 rounded-tl-none border border-gray-700"
+                                ? "bg-primary text-primary-foreground rounded-tr-sm"
+                                : "bg-muted rounded-tl-sm"
                         )}>
                             <Markdown
-                                className="prose prose-invert prose-sm max-w-none"
+                                className="prose prose-invert prose-sm max-w-none [&>p]:mb-1.5 [&>p:last-child]:mb-0 [&>ul]:pl-4 [&>ol]:pl-4"
                                 components={{
-                                    p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
-                                    ul: ({ node, ...props }) => <ul className="list-disc pl-4 mb-2" {...props} />,
-                                    ol: ({ node, ...props }) => <ol className="list-decimal pl-4 mb-2" {...props} />,
-                                    a: ({ node, ...props }) => <a className="text-blue-300 hover:underline" {...props} />,
+                                    p: ({ node, ...props }) => <p {...props} />,
+                                    a: ({ node, ...props }) => <a className="text-primary hover:underline" {...props} />,
                                 }}
                             >
                                 {msg.content}
                             </Markdown>
+
+                            {/* Source sections */}
+                            {msg.role === 'assistant' && msg.source_sections && msg.source_sections.length > 0 && (
+                                <div className="mt-2 pt-2 border-t border-border/40 flex flex-wrap gap-1 items-center">
+                                    <FileText className="w-3 h-3 text-muted-foreground" />
+                                    {msg.source_sections.map((s, i) => (
+                                        <Badge
+                                            key={i}
+                                            variant="secondary"
+                                            className="text-[10px] font-normal"
+                                            title={`${s.title} — Page ${s.pages}`}
+                                        >
+                                            <span className="truncate max-w-[100px] sm:max-w-none">{s.title}</span>
+                                            <span className="ml-1 text-muted-foreground">p.{s.pages}</span>
+                                        </Badge>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
                 ))}
 
                 {isLoading && (
-                    <div className="flex gap-3 mr-auto max-w-[85%]">
-                        <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center shrink-0 animate-pulse">
-                            <Bot className="w-4 h-4 text-white" />
+                    <div className="flex gap-2.5 mr-auto max-w-[80%]">
+                        <div className="w-7 h-7 rounded-full bg-muted border flex items-center justify-center shrink-0">
+                            <Bot className="w-3.5 h-3.5 text-muted-foreground animate-pulse-subtle" />
                         </div>
-                        <div className="bg-gray-800 p-3 rounded-2xl rounded-tl-none border border-gray-700 flex items-center gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-                            <span className="text-xs text-gray-400">Thinking...</span>
+                        <div className="bg-muted px-3 py-2 rounded-xl rounded-tl-sm flex items-center gap-2">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">Searching document tree...</span>
                         </div>
                     </div>
                 )}
 
                 {error && (
-                    <div className="text-center text-red-400 text-sm mt-2 p-2 bg-red-950/20 rounded border border-red-900/30">
+                    <div className="text-center text-destructive text-sm p-2 bg-destructive/10 rounded-md border border-destructive/20">
                         {error}
                     </div>
                 )}
             </div>
 
-            <div className="p-4 border-t border-gray-800 bg-gray-900/80 backdrop-blur-sm">
+            {/* Input */}
+            <div className="p-3 sm:p-4 border-t safe-bottom">
                 <form onSubmit={handleSubmit} className="relative">
                     <input
                         ref={inputRef}
                         type="text"
-                        placeholder="Type your question..."
-                        className="w-full bg-gray-950 text-gray-200 border border-gray-700 rounded-full py-3 pl-4 pr-12 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all shadow-inner"
+                        placeholder="Ask about this document..."
+                        className="w-full bg-muted rounded-lg py-2.5 pl-3.5 pr-11 text-sm border border-transparent focus:outline-none focus:border-ring transition-colors placeholder:text-muted-foreground"
                         disabled={isLoading}
                     />
-                    <button
+                    <Button
                         type="submit"
                         disabled={isLoading}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        size="icon"
+                        variant="ghost"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
                     >
-                        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                    </button>
+                        {isLoading
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Send className="w-4 h-4" />
+                        }
+                    </Button>
                 </form>
             </div>
-        </div>
+        </Card>
     );
 };
 
