@@ -1,31 +1,20 @@
 import pymupdf  # PyMuPDF — reads electronic PDFs in any language natively
+import pytesseract
+from PIL import Image
 import docx
 from fastapi import HTTPException
 import io
 import logging
 import asyncio
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# PaddleOCR — fully local, no API calls
-# Lazy-loaded to avoid 400MB memory spike at startup
-_ocr_engine = None
-
-def _get_ocr(lang: str = "en"):
-    """Lazy-load PaddleOCR engine on first use."""
-    global _ocr_engine
-    if _ocr_engine is None or getattr(_ocr_engine, '_lang', 'en') != lang:
-        try:
-            import os
-            os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-            from paddleocr import PaddleOCR
-            _ocr_engine = PaddleOCR(use_angle_cls=True, lang=lang)
-            _ocr_engine._lang = lang  # track current lang
-            logger.info("PaddleOCR loaded (lang=%s)", lang)
-        except ImportError:
-            raise RuntimeError("PaddleOCR not installed. Run: pip install paddleocr paddlepaddle")
-    return _ocr_engine
+# Tesseract language map (Indian languages)
+_LANG_MAP = {
+    "en-IN": "eng", "hi-IN": "hin", "ta-IN": "tam", "te-IN": "tel",
+    "kn-IN": "kan", "ml-IN": "mal", "bn-IN": "ben", "gu-IN": "guj",
+    "mr-IN": "mar", "pa-IN": "pan", "ur-IN": "urd",
+}
 
 
 class DocumentParser:
@@ -38,7 +27,7 @@ class DocumentParser:
         """
         Extract text from documents.
         - doc_type="digital": PyMuPDF (fast, any language)
-        - doc_type="scanned": PaddleOCR (local, no API calls)
+        - doc_type="scanned": Tesseract OCR (local, no API calls)
         """
         self._needs_ocr = False
         self._page_texts = []
@@ -57,7 +46,7 @@ class DocumentParser:
             raise HTTPException(status_code=400, detail="Unsupported file type")
 
     def _extract_pdf_digital(self, content: bytes) -> str:
-        """Extract text from electronic PDF using PyMuPDF — works for any language."""
+        """Extract text from electronic PDF using PyMuPDF."""
         with pymupdf.open(stream=content, filetype="pdf") as doc:
             self._page_count = len(doc)
             all_text = []
@@ -69,62 +58,31 @@ class DocumentParser:
         return "\n\n".join(t for t in all_text if t)
 
     async def _extract_pdf_scanned(self, content: bytes, ocr_language: str = "en-IN") -> str:
-        """Extract text from scanned PDF using PaddleOCR (fully local, no API calls)."""
-        if not _ocr_engine:
-            raise HTTPException(500, "PaddleOCR not installed. Run: pip install paddleocr paddlepaddle")
-
+        """Extract text from scanned PDF using Tesseract OCR (fully local)."""
         self._needs_ocr = True
+        tess_lang = _LANG_MAP.get(ocr_language, "eng")
 
-        # Map language codes to PaddleOCR lang keys
-        lang_map = {
-            "en-IN": "en", "hi-IN": "hi", "ta-IN": "ta", "te-IN": "te",
-            "kn-IN": "kn", "ml-IN": "ml", "bn-IN": "bn", "gu-IN": "gu",
-            "mr-IN": "mr", "pa-IN": "pa", "ur-IN": "ur",
-        }
-        paddle_lang = lang_map.get(ocr_language, "en")
-
-        # Reload OCR engine if language changed from default
-        ocr = _ocr_engine
-        if paddle_lang != "en":
-            try:
-                ocr = PaddleOCR(use_angle_cls=True, lang=paddle_lang, show_log=False)
-            except Exception:
-                ocr = _ocr_engine  # fall back to English
-
-        # Render pages to images and OCR
         with pymupdf.open(stream=content, filetype="pdf") as doc:
             self._page_count = len(doc)
             page_texts = []
 
             for i, page in enumerate(doc):
                 try:
-                    pix = page.get_pixmap(dpi=200)
-                    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-                        pix.height, pix.width, pix.n
+                    # Render page to image at 300 DPI for better OCR accuracy
+                    pix = page.get_pixmap(dpi=300)
+                    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+                    # Run Tesseract in thread to not block event loop
+                    text = await asyncio.to_thread(
+                        pytesseract.image_to_string, img, lang=tess_lang
                     )
-                    # RGB only (drop alpha if present)
-                    if pix.n == 4:
-                        img_array = img_array[:, :, :3]
-
-                    # Run OCR on numpy array
-                    result = await asyncio.to_thread(ocr.ocr, img_array, cls=True)
-
-                    # Extract text lines sorted by vertical position
-                    lines = []
-                    if result and result[0]:
-                        for line in result[0]:
-                            text = line[1][0] if line[1] else ""
-                            if text.strip():
-                                lines.append(text.strip())
-
-                    page_text = "\n".join(lines)
-                    page_texts.append(page_text)
+                    page_texts.append(text.strip())
                 except Exception as e:
                     logger.warning("OCR failed for page %d: %s", i + 1, e)
                     page_texts.append(f"[OCR failed for page {i + 1}]")
 
         self._page_texts = page_texts
-        logger.info("PaddleOCR completed — %d pages", len(page_texts))
+        logger.info("Tesseract OCR completed — %d pages", len(page_texts))
 
         full_text = "\n\n".join(t for t in page_texts if t)
         if not full_text.strip():

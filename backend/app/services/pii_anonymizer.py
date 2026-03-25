@@ -10,9 +10,9 @@ try:
     from presidio_analyzer.nlp_engine import NlpEngineProvider
     from presidio_anonymizer import AnonymizerEngine
 
-    # Use en_core_web_sm (~13MB) instead of en_core_web_lg (~560MB)
-    # to fit within Render free tier's 512MB RAM limit.
-    # Our custom Indian regex recognizers cover the gap in NER accuracy.
+    # Silence noisy "Entity CARDINAL is not mapped" warnings from Presidio
+    logging.getLogger("presidio-analyzer").setLevel(logging.ERROR)
+
     _nlp_config = {
         "nlp_engine_name": "spacy",
         "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
