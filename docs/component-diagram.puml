@@ -1,0 +1,175 @@
+@startuml Legal Assist - Component & Deployment Overview
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam roundCorner 12
+skinparam linetype ortho
+
+title **Legal Assist** — System Component & Deployment Diagram\n
+
+' ═══════════════════════════════════════════════════
+' CLIENT TIER
+' ═══════════════════════════════════════════════════
+
+package "Frontend  «React + Vite»" as FE #E0F2FE {
+    component [Landing Page] as LP
+    component [Auth Page] as AP
+    component [Upload View] as UV
+    component [Analysis Dashboard] as AD
+    component [Risk Page] as RP
+    component [Clauses Page] as CP
+    component [Chat Page] as ChatP
+
+    component [Theme Context\nlight/dark] as TC
+    component [Auth Context\nJWT token] as AC
+    component [Session Context\nsession_id] as SC
+
+    LP -[hidden]r-> AP
+    AP -[hidden]r-> UV
+    AD -[hidden]r-> RP
+    RP -[hidden]r-> CP
+    CP -[hidden]r-> ChatP
+}
+
+' ═══════════════════════════════════════════════════
+' API GATEWAY
+' ═══════════════════════════════════════════════════
+
+package "API Gateway  «FastAPI + Uvicorn»" as GW #FEF3C7 {
+    component [CORS\nMiddleware] as CORS
+    component [SlowAPI\nRate Limiter\n30 RPM] as RL
+    component [JWT Auth\nBearer Token] as JWT
+
+    portin "HTTPS :8000" as Port
+
+    CORS -[hidden]r-> RL
+    RL -[hidden]r-> JWT
+}
+
+' ═══════════════════════════════════════════════════
+' API ROUTES
+' ═══════════════════════════════════════════════════
+
+package "API Routes  «/api/v1»" as Routes #DBEAFE {
+    component [Auth\nRouter] as AuthR
+    component [Document\nRouter] as DocR
+    component [Analysis\nRouter] as AnaR
+    component [Chat\nRouter] as ChatR
+    component [Health\nRouter] as HealthR
+}
+
+' ═══════════════════════════════════════════════════
+' SERVICE LAYER
+' ═══════════════════════════════════════════════════
+
+package "Service Layer  «Business Logic»" as SvcLayer #E8F5E9 {
+
+    package "Authentication" as AuthPkg {
+        component [AuthService\n«JWT + bcrypt»] as AuthSvc
+    }
+
+    package "Document Processing Pipeline" as DocPkg {
+        component [DocumentParser\n«PyMuPDF / DOCX»] as DocParser
+        component [PIIAnonymizer\n«Presidio + 12 Indian\nrecognizers»] as PIISvc
+    }
+
+    package "Vectorless RAG Engine" as RAGPkg {
+        component [HTOCBuilder\n«Hierarchical TOC\nvia LLM reasoning»] as HTOCBld
+        component [BM25Search\n«BM25Okapi +\nHTOC boost»] as BM25Svc
+        component [TreeSearch\n«LLM navigates\nHTOC tree»] as TreeSvc
+    }
+
+    package "AI & Generation" as AIPkg {
+        component [GeminiClient\n«Analysis, Chat,\nJSON, OCR»] as GeminiSvc
+        component [ReportGenerator\n«Jinja2 + WeasyPrint\n→ PDF»] as ReportSvc
+    }
+
+    package "Persistence" as PersistPkg {
+        component [SessionService\n«CRUD + caching»] as SessSvc
+    }
+}
+
+' ═══════════════════════════════════════════════════
+' EXTERNAL SYSTEMS
+' ═══════════════════════════════════════════════════
+
+cloud "Google Cloud" as GCloud #FEE2E2 {
+    component [Gemini 2.5 Flash\n«Free Tier»\n5 RPM / 250k TPM] as GeminiAPI
+}
+
+cloud "MongoDB Atlas" as MongoCloud #FEE2E2 {
+    database [users] as UsersDB
+    database [sessions\n«TTL: 2h»] as SessionsDB
+}
+
+package "Local ML  «Zero External Data»" as LocalML #F3E8FF {
+    component [Presidio\nAnalyzerEngine] as PresidioEng
+    component [spaCy\nen_core_web_sm\n«13MB, fits 512MB»] as SpaCy
+    component [Custom Recognizers\nAadhaar · PAN · GSTIN\nVoter · Passport · DL\nIFSC · Vehicle · PIN] as CustomRec
+}
+
+' ═══════════════════════════════════════════════════
+' CONNECTIONS
+' ═══════════════════════════════════════════════════
+
+' Frontend → API
+FE ==> Port : Axios + SSE
+
+' Gateway flow
+Port --> CORS
+CORS --> RL
+RL --> JWT
+JWT --> Routes
+
+' Routes → Services
+AuthR --> AuthSvc
+DocR --> DocParser
+DocR --> PIISvc
+DocR --> SessSvc
+DocR --> HTOCBld
+DocR --> BM25Svc
+
+AnaR --> GeminiSvc
+AnaR --> TreeSvc
+AnaR --> PIISvc
+AnaR --> SessSvc
+AnaR --> ReportSvc
+
+ChatR --> BM25Svc : 1. fast keyword search
+ChatR --> TreeSvc : 2. LLM fallback\n(if BM25 low confidence)
+ChatR --> GeminiSvc : 3. chat response
+ChatR --> PIISvc
+ChatR --> SessSvc
+
+' Service → Service
+HTOCBld --> GeminiSvc : generate_json()
+TreeSvc --> GeminiSvc : generate_json()
+DocParser --> GeminiSvc : Vision OCR\n«scanned only»
+
+' Service → External
+GeminiSvc ==> GeminiAPI : google-genai SDK
+AuthSvc --> UsersDB : motor (async)
+SessSvc --> SessionsDB : motor (async)
+PIISvc --> PresidioEng
+PresidioEng --> SpaCy : NER backbone
+PresidioEng --> CustomRec
+ReportSvc --> ReportSvc : WeasyPrint
+
+' ═══════════════════════════════════════════════════
+' LEGENDS
+' ═══════════════════════════════════════════════════
+
+legend bottom right
+  |= Color |= Layer |
+  | <#E0F2FE> | Frontend (React) |
+  | <#FEF3C7> | API Gateway |
+  | <#DBEAFE> | API Routes |
+  | <#E8F5E9> | Service Layer |
+  | <#F3E8FF> | Local ML |
+  | <#FEE2E2> | External Systems |
+endlegend
+
+@enduml

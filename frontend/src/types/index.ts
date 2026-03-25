@@ -20,7 +20,7 @@ export interface UploadResponse {
     detected_pii_count: number;
     needs_ocr: boolean;
     expires_in_seconds: number;
-    htoc_sections?: number; // Number of HTOC tree sections identified
+    htoc_status: string; // "building" | "ready" | "failed"
 }
 
 export interface Clause {

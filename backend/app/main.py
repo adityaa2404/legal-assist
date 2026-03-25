@@ -6,6 +6,17 @@ from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
 from app.api.v1.router import api_router
 import uvicorn
+import logging
+
+# Clean logging: only show warnings+ from noisy libs, INFO for our code
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-5s  %(name)s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+# Silence noisy third-party loggers
+for noisy in ("httpx", "httpcore", "google", "urllib3", "motor", "pymongo", "presidio"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
 
 limiter = Limiter(key_func=get_remote_address)
 

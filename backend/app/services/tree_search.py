@@ -54,27 +54,29 @@ class TreeSearchService:
         # Build a lightweight tree (summaries only, no full text)
         tree_structure = self._strip_text(tree)
 
-        prompt = f"""You are a legal document expert. Given a user's question and a document's hierarchical table of contents (HTOC), identify which sections are most likely to contain the answer.
+        prompt = f"""You are a legal document expert. Given a query (which may include prior conversation context) and a document's hierarchical table of contents (HTOC), identify which sections contain the answer.
 
-USER QUESTION: {query}
+QUERY:
+{query}
 
 DOCUMENT STRUCTURE (HTOC):
 {json.dumps(tree_structure, indent=2)}
 
 Return a JSON object:
 {{
-  "reasoning": "Brief explanation of why these sections are relevant",
+  "reasoning": "Why these sections are relevant to the query",
   "selected_nodes": ["node_id_1", "node_id_2"],
   "confidence": "high | medium | low"
 }}
 
-RULES:
-- Select up to {max_nodes} most relevant nodes (prefer fewer, more precise selections)
-- Consider parent-child relationships: if a specific child is relevant, select the child not the parent
-- For broad questions like "summarize the document" or "what is this about", select the root node or the most important top-level sections
-- For specific questions about a clause, term, or party, drill down to the most precise section
-- If the question asks about risks, obligations, or termination, find those specific sections
-- Always prefer leaf nodes (most specific) unless the question spans multiple sub-sections
+SELECTION RULES:
+1. Precision over breadth: prefer 2-3 highly relevant sections over {max_nodes} weak ones
+2. Leaf-first: select the most specific (deepest) section possible
+3. Do NOT select a parent if a child node is more specific to the query
+4. For broad questions ("summarize", "what is this about"): select the 3-4 most important top-level sections
+5. For specific queries (a clause, term, party, amount): find the exact section
+6. If the query references prior conversation ("tell me more", "what about that", "their obligations"), use the conversation context to understand what topic is being discussed and select sections for THAT topic
+7. Select up to {max_nodes} nodes maximum
 - RETURN ONLY VALID JSON"""
 
         try:
@@ -128,9 +130,14 @@ RULES:
 
         context = "\n\n".join(context_parts)
 
-        # Truncate if too long
+        # Truncate at a sentence boundary if too long
         if len(context) > MAX_CONTEXT_CHARS:
-            context = context[:MAX_CONTEXT_CHARS] + "\n\n[Content truncated for length]"
+            truncated = context[:MAX_CONTEXT_CHARS]
+            # Find the last sentence-ending punctuation to avoid mid-sentence cuts
+            last_period = max(truncated.rfind('. '), truncated.rfind('.\n'))
+            if last_period > MAX_CONTEXT_CHARS * 0.8:
+                truncated = truncated[:last_period + 1]
+            context = truncated + "\n\n[Note: Some content was truncated due to length. The above covers the most relevant sections.]"
 
         return {
             "context": context,

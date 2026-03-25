@@ -1,0 +1,124 @@
+@startuml Legal Assist - Analysis Flow
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam sequenceArrowThickness 1.5
+skinparam sequenceParticipantBorderColor #64748B
+skinparam sequenceParticipantBackgroundColor #F8FAFC
+skinparam sequenceLifeLineBorderColor #94A3B8
+
+title **Analysis Flow** — Full & Short Analysis + PDF Report
+
+actor "Client" as Client #E0F2FE
+participant "AnalysisRouter\n«/analyze»" as Router #DBEAFE
+participant "SessionService" as Session #E8F5E9
+participant "TreeSearchService" as Tree #E8F5E9
+participant "GeminiClient" as Gemini #FEE2E2
+participant "PIIAnonymizer" as PII #E8F5E9
+participant "ReportGenerator" as Report #E8F5E9
+database "MongoDB" as DB #FEE2E2
+
+== POST /api/v1/analyze (analysis_type=full|short) ==
+
+Client -> Router : POST + X-Session-ID header\n+ analysis_type query param
+activate Router
+
+Router -> Session : get(session_id)
+activate Session
+Session -> DB : FIND session
+DB --> Session : session document
+Session --> Router : Session
+deactivate Session
+
+alt htoc_status = "processing"
+    Router --> Client : **202** "Document still processing"
+else no anonymized_text
+    Router --> Client : **400** "No text available"
+end
+
+Router -> Session : get_analysis(session_id, type)
+activate Session
+Session -> DB : FIND cached_analysis_{type}
+Session --> Router : cached result or None
+deactivate Session
+
+alt Cache HIT
+    Router --> Client : **200** AnalysisResponse (cached)
+
+else type="short" AND cached_analysis_full exists
+    Router -> Session : get_analysis(session_id, "full")
+    Session --> Router : full_result
+
+    Router -> Router : _derive_short_from_full()\n• Trim summary to 2 sentences\n• Top 5 clauses by importance\n• Top 5 risks by severity
+
+    Router -> PII : deanonymize_dict(short_result, pii_mapping)
+    PII --> Router : de-anonymized result
+
+    Router -> Session : save_analysis(session_id, "short", result)
+    Session -> DB : UPDATE cached_analysis_short
+
+    Router --> Client : **200** AnalysisResponse\n«saved 1 Gemini call»
+
+else Cache MISS — fresh analysis needed
+
+    alt HTOC tree available
+        Router -> Tree : search_for_analysis(tree, page_texts, gemini)
+        activate Tree
+        Tree -> Tree : Build structured context\nfrom all HTOC sections
+        Tree --> Router : structured_context (organized by section)
+        deactivate Tree
+    else No HTOC
+        Router -> Router : Use full anonymized_text as context
+    end
+
+    Router -> Gemini : analyze_document(context, analysis_type)
+    activate Gemini
+    Gemini -> Gemini : Build prompt:\n• JSON schema for output\n• Risk scoring formula\n• full vs short template
+    Gemini -> Gemini : response_mime_type="application/json"\nmax_output_tokens=65536
+    Gemini --> Router : raw JSON response
+    Gemini -> Gemini : _clean_json_response()\n_repair_truncated_json()\n_extract_json_bruteforce()
+    Gemini --> Router : parsed Dict
+    deactivate Gemini
+
+    Router -> Router : _normalize_result()\n• Ensure List[Dict] for obligations\n• Ensure List[str] for missing_clauses\n• Ensure {role, name} for parties
+
+    Router -> PII : deanonymize_dict(result, pii_mapping)
+    activate PII
+    PII -> PII : Replace [PERSON_1] → "John Doe"\nReplace [ORG_1] → "ABC Corp"
+    PII --> Router : de-anonymized result
+    deactivate PII
+
+    Router -> Session : save_analysis(session_id, type, result)
+    activate Session
+    Session -> DB : UPDATE cached_analysis_{type}
+    deactivate Session
+
+    Router --> Client : **200** AnalysisResponse
+end
+
+deactivate Router
+
+== GET /api/v1/analyze/report (PDF Download) ==
+
+Client -> Router : GET + X-Session-ID + analysis_type
+activate Router
+
+Router -> Router : Run analysis flow above\n(uses cache if available)
+
+Router -> Report : create_pdf_from_analysis(\ndata, filename, type)
+activate Report
+Report -> Report : Select template:\n• full → template.html\n• short → template_short.html
+Report -> Report : Jinja2 render with:\n• IST timestamp\n• Color-coded risk bar\n• Severity-sorted risks
+Report -> Report : WeasyPrint: HTML → PDF bytes
+Report --> Router : PDF bytes
+deactivate Report
+
+Router --> Client : **200** application/pdf\nContent-Disposition: attachment
+
+deactivate Router
+
+@enduml

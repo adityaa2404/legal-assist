@@ -8,6 +8,7 @@ Instead of vector embeddings, the document is organized into a navigable tree th
 an LLM can reason over to find relevant sections for any query.
 """
 
+import asyncio
 import json
 import logging
 from typing import List, Dict, Any
@@ -15,9 +16,11 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 # Max pages to include in a single HTOC building prompt
-MAX_PAGES_PER_PROMPT = 50
+MAX_PAGES_PER_PROMPT = 100
 # Max chars per page preview in the prompt
-MAX_CHARS_PER_PAGE_PREVIEW = 800
+MAX_CHARS_PER_PAGE_PREVIEW = 600
+# Skip HTOC for very small docs (BM25 alone is good enough)
+SKIP_HTOC_THRESHOLD = 3
 
 
 class HTOCBuilder:
@@ -41,6 +44,12 @@ class HTOCBuilder:
             return self._empty_tree()
 
         num_pages = len(page_texts)
+
+        # For very small docs (≤3 pages), skip the LLM call entirely.
+        # BM25 keyword search is sufficient — saves 1 Gemini call.
+        if num_pages <= SKIP_HTOC_THRESHOLD:
+            logger.info(f"Small doc ({num_pages} pages), using simple tree (no LLM call)")
+            return self._simple_tree(page_texts)
 
         if num_pages <= MAX_PAGES_PER_PROMPT:
             return await self._build_tree_single(page_texts, gemini_client)
@@ -107,17 +116,37 @@ RULES:
     async def _build_tree_chunked(
         self, page_texts: List[str], gemini_client
     ) -> Dict[str, Any]:
-        """Build tree for large documents by processing in chunks then merging."""
+        """Build tree for large documents by processing chunks with controlled concurrency."""
         chunk_size = MAX_PAGES_PER_PROMPT
-        sub_trees = []
 
-        for start in range(0, len(page_texts), chunk_size):
-            end = min(start + chunk_size, len(page_texts))
-            chunk = page_texts[start:end]
-            sub_tree = await self._build_tree_single(chunk, gemini_client)
-            # Offset page numbers to global indices
-            self._offset_pages(sub_tree, start)
-            sub_trees.append(sub_tree)
+        # Limit concurrent Gemini calls to avoid rate limits
+        # Free tier: 5 req/min → allow 2 concurrent to leave room for other calls
+        semaphore = asyncio.Semaphore(2)
+
+        async def _build_chunk(start: int) -> Dict[str, Any]:
+            async with semaphore:
+                end = min(start + chunk_size, len(page_texts))
+                chunk = page_texts[start:end]
+                sub_tree = await self._build_tree_single(chunk, gemini_client)
+                self._offset_pages(sub_tree, start)
+                return sub_tree
+
+        tasks = [_build_chunk(s) for s in range(0, len(page_texts), chunk_size)]
+        sub_trees = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Handle any failed chunks with fallback trees
+        resolved = []
+        for i, result in enumerate(sub_trees):
+            if isinstance(result, Exception):
+                start = i * chunk_size
+                end = min(start + chunk_size, len(page_texts))
+                logger.warning(f"Chunk {i} failed: {result}, using fallback")
+                fallback = self._fallback_tree_from_count(end - start)
+                self._offset_pages(fallback, start)
+                resolved.append(fallback)
+            else:
+                resolved.append(result)
+        sub_trees = resolved
 
         if len(sub_trees) == 1:
             return sub_trees[0]
@@ -258,6 +287,29 @@ RULES:
             "start_page": 0,
             "end_page": num_pages - 1,
             "summary": "Document content",
+            "children": children,
+        }
+
+    def _simple_tree(self, page_texts: List[str]) -> Dict:
+        """Build a lightweight tree for small docs without an LLM call."""
+        children = []
+        for i, text in enumerate(page_texts):
+            # Use first 80 chars as a title hint
+            first_line = text.strip().split("\n")[0][:80] if text.strip() else f"Page {i+1}"
+            children.append({
+                "title": first_line,
+                "node_id": f"{i+1:04d}",
+                "start_page": i,
+                "end_page": i,
+                "summary": text[:200].strip() if text else "",
+                "children": [],
+            })
+        return {
+            "title": children[0]["title"] if children else "Document",
+            "node_id": "root",
+            "start_page": 0,
+            "end_page": len(page_texts) - 1,
+            "summary": "Small document — indexed by page",
             "children": children,
         }
 

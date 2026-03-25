@@ -16,6 +16,59 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _derive_short_from_full(full: dict) -> dict:
+    """
+    Derive a short analysis from a full one — saves 1 Gemini call.
+    Trims summaries, limits clauses/risks, keeps structure identical.
+    """
+    import copy
+    short = copy.deepcopy(full)
+
+    # Trim summary to first 2 sentences
+    summary = short.get("summary", "")
+    sentences = summary.replace("\n", " ").split(". ")
+    if len(sentences) > 2:
+        short["summary"] = ". ".join(sentences[:2]) + "."
+
+    # Limit key clauses to top 5 (critical + important first)
+    clauses = short.get("key_clauses", [])
+    importance_order = {"critical": 0, "important": 1, "standard": 2}
+    clauses.sort(key=lambda c: importance_order.get(c.get("importance", "standard"), 2))
+    short["key_clauses"] = clauses[:5]
+    for clause in short["key_clauses"]:
+        # Trim clause_text to 150 chars
+        text = clause.get("clause_text", "")
+        if len(text) > 150:
+            clause["clause_text"] = text[:150].rsplit(" ", 1)[0] + "..."
+        # Trim plain_english to 1 sentence
+        pe = clause.get("plain_english", "")
+        pe_sentences = pe.split(". ")
+        if len(pe_sentences) > 1:
+            clause["plain_english"] = pe_sentences[0] + "."
+
+    # Limit risks to top 5 (high severity first)
+    risks = short.get("risks", [])
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    risks.sort(key=lambda r: severity_order.get(r.get("severity", "low"), 2))
+    short["risks"] = risks[:5]
+    for risk in short["risks"]:
+        desc = risk.get("description", "")
+        desc_sentences = desc.split(". ")
+        if len(desc_sentences) > 1:
+            risk["description"] = desc_sentences[0] + "."
+        rec = risk.get("recommendation", "")
+        rec_sentences = rec.split(". ")
+        if len(rec_sentences) > 1:
+            risk["recommendation"] = rec_sentences[0] + "."
+
+    # Limit obligations to 5
+    short["obligations"] = short.get("obligations", [])[:5]
+
+    # Keep missing_clauses, overall_risk_score, parties, document_type as-is
+
+    return short
+
+
 def _normalize_result(result: dict) -> dict:
     if isinstance(result.get("obligations"), str):
         result["obligations"] = [{"description": result["obligations"]}]
@@ -52,9 +105,20 @@ async def _get_or_run_analysis(
 
     anonymized_text = session.anonymized_text
     if not anonymized_text:
+        status = getattr(session, 'htoc_status', None) or 'pending'
+        if status in ("processing", "building"):
+            raise HTTPException(202, "Document is still being processed. Please wait and try again in a few seconds.")
         raise HTTPException(400, "No document text found in session")
 
-    # Check cache first
+    # For short analysis, try to derive from cached full analysis first (saves 1 Gemini call)
+    if analysis_type == "short":
+        cached_full = await session_service.get_analysis(session_id, "full")
+        if cached_full:
+            short_result = _derive_short_from_full(cached_full)
+            await session_service.save_analysis(session_id, "short", short_result)
+            return short_result
+
+    # Check cache for this specific analysis type
     cached = await session_service.get_analysis(session_id, analysis_type)
     if cached:
         return cached
@@ -65,8 +129,6 @@ async def _get_or_run_analysis(
 
     if has_htoc and tree_search:
         try:
-            # Use tree-structured context: sections are organized hierarchically
-            # with headers and page references for better analysis
             structured_context = await tree_search.search_for_analysis(
                 tree=session.htoc_tree,
                 page_texts=session.page_texts,
@@ -77,17 +139,25 @@ async def _get_or_run_analysis(
         except Exception as e:
             logger.warning(f"HTOC analysis context failed, using full text: {e}")
 
-    # Run Gemini
+    # Always run full analysis — short can be derived from it
+    run_type = "full" if analysis_type == "short" else analysis_type
+
     try:
-        raw_result = await gemini.analyze_document(document_context, analysis_type)
+        raw_result = await gemini.analyze_document(document_context, run_type)
     except Exception as e:
         raise HTTPException(500, f"Analysis failed: {str(e)}")
 
     result = pii_service.deanonymize_dict(raw_result, session.pii_mapping)
     result = _normalize_result(result)
 
-    # Cache for future use (report endpoint)
-    await session_service.save_analysis(session_id, analysis_type, result)
+    # Cache the full analysis
+    await session_service.save_analysis(session_id, run_type, result)
+
+    # If short was requested, derive it from the full we just ran
+    if analysis_type == "short":
+        short_result = _derive_short_from_full(result)
+        await session_service.save_analysis(session_id, "short", short_result)
+        return short_result
 
     return result
 

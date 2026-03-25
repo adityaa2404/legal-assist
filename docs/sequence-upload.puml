@@ -1,0 +1,148 @@
+@startuml Legal Assist - Document Upload Flow
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam sequenceArrowThickness 1.5
+skinparam sequenceParticipantBorderColor #64748B
+skinparam sequenceParticipantBackgroundColor #F8FAFC
+skinparam sequenceLifeLineBorderColor #94A3B8
+skinparam sequenceGroupBorderColor #CBD5E1
+skinparam sequenceGroupBackgroundColor #F1F5F9
+skinparam sequenceDividerBorderColor #CBD5E1
+
+title **Document Upload Flow** — Digital & Scanned PDF
+
+actor "Client" as Client #E0F2FE
+participant "DocumentRouter\n«/documents»" as Router #DBEAFE
+participant "Dependencies\n«JWT Guard»" as Auth #FEF3C7
+participant "DocumentParser" as Parser #E8F5E9
+participant "PIIAnonymizer\n«Presidio»" as PII #E8F5E9
+participant "SessionService\n«MongoDB»" as Session #E8F5E9
+participant "HTOCBuilder" as HTOC #E8F5E9
+participant "BM25Search" as BM25 #E8F5E9
+participant "GeminiClient\n«Gemini 2.5 Flash»" as Gemini #FEE2E2
+database "MongoDB" as DB #FEE2E2
+
+== POST /api/v1/documents/upload ==
+
+Client -> Router : POST file + doc_type + ocr_language
+activate Router
+
+Router -> Auth : get_current_user(Bearer token)
+activate Auth
+Auth -> Auth : decode JWT
+Auth --> Router : user_email
+deactivate Auth
+
+Router -> Router : Validate file extension\n(PDF/DOCX only)
+
+alt doc_type = "digital"
+
+    Router -> Parser : extract_async(content, "digital")
+    activate Parser
+    Parser -> Parser : PyMuPDF: extract per-page text
+    Parser --> Router : full_text, page_texts[]
+    deactivate Parser
+
+    Router -> PII : anonymize(full_text)
+    activate PII
+    PII -> PII : Presidio AnalyzerEngine\n(12 Indian recognizers + NER)
+    PII -> PII : Resolve overlaps\nCreate tokens: [PERSON_1], [ORG_1]...
+    PII --> Router : anonymized_text, pii_mapping{}
+    deactivate PII
+
+    Router -> Session : create(session_id, anon_text,\npage_texts, pii_mapping, metadata)
+    activate Session
+    Session -> DB : INSERT session document\nhtoc_status="building"
+    Session --> Router : Session object
+    deactivate Session
+
+    Router --> Client : **200** UploadResponse\n{session_id, page_count,\nhtoc_status="building"}
+
+    note right of Router #FFF7ED
+        Response returned immediately.
+        HTOC + BM25 build in background.
+    end note
+
+    Router ->> HTOC : **background** build_tree(page_texts)
+    activate HTOC #E8F5E9
+    HTOC -> Gemini : generate_json(page_previews + prompt)
+    Gemini --> HTOC : HTOC tree JSON
+    HTOC -> HTOC : Validate + fix tree
+    HTOC --> Router : htoc_tree{}
+    deactivate HTOC
+
+    Router ->> BM25 : **background** build_index(page_texts, htoc_tree)
+    activate BM25 #E8F5E9
+    BM25 -> BM25 : Tokenize pages\nCreate BM25Okapi index\nBuild page→node map
+    BM25 --> Router : bm25_data{}
+    deactivate BM25
+
+    Router -> Session : update_htoc_and_bm25(\nhtoc_tree, bm25_data, "ready")
+    activate Session
+    Session -> DB : UPDATE session\nhtoc_status="ready"
+    Session --> Router
+    deactivate Session
+
+else doc_type = "scanned"
+
+    Router -> Parser : get page_count only (PyMuPDF)
+    Parser --> Router : page_count
+
+    Router -> Session : create(session_id, metadata)\nhtoc_status="processing"
+    activate Session
+    Session -> DB : INSERT session (no text yet)
+    Session --> Router : Session
+    deactivate Session
+
+    Router --> Client : **200** UploadResponse\n{session_id, page_count,\nhtoc_status="processing"}
+
+    note right of Router #FFF7ED
+        Entire pipeline runs
+        in background task.
+        Frontend polls /htoc-status.
+    end note
+
+    Router ->> Parser : **background** _extract_pdf_scanned()
+    activate Parser #E8F5E9
+
+    loop each page (max 2 concurrent)
+        Parser -> Gemini : Vision OCR\n(PNG image + language hint)
+        Gemini --> Parser : extracted text
+    end
+
+    Parser --> Router : page_texts[]
+    deactivate Parser
+
+    Router -> PII : anonymize(ocr_text)
+    PII --> Router : anonymized_text, pii_mapping
+
+    Router -> Session : update(anon_text, page_texts,\npii_mapping, htoc_status="building")
+    Session -> DB : UPDATE session
+
+    Router ->> HTOC : **background** build_tree(page_texts)
+    HTOC -> Gemini : generate_json()
+    Gemini --> HTOC : HTOC tree
+    Router ->> BM25 : **background** build_index()
+
+    Router -> Session : update(htoc_tree, bm25_data,\nhtoc_status="ready")
+    Session -> DB : UPDATE session
+
+end
+
+deactivate Router
+
+== Polling (frontend) ==
+
+Client -> Router : GET /documents/htoc-status
+Router -> Session : get(session_id)
+Session -> DB : FIND session
+DB --> Session : session doc
+Session --> Router : Session
+Router --> Client : {status, has_htoc, has_bm25}
+
+@enduml

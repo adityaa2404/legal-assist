@@ -1,0 +1,178 @@
+@startuml Legal Assist - Chat Flow (Hybrid RAG)
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam sequenceArrowThickness 1.5
+skinparam sequenceParticipantBorderColor #64748B
+skinparam sequenceParticipantBackgroundColor #F8FAFC
+skinparam sequenceLifeLineBorderColor #94A3B8
+
+title **Chat Flow** — Hybrid RAG (BM25 + LLM Tree Search)
+
+actor "Client" as Client #E0F2FE
+participant "ChatRouter\n«/chat»" as Router #DBEAFE
+participant "PIIAnonymizer\n«Presidio»" as PII #E8F5E9
+participant "BM25Search\n«keyword»" as BM25 #E8F5E9
+participant "TreeSearch\n«LLM reasoning»" as Tree #E8F5E9
+participant "SessionService" as Session #E8F5E9
+participant "GeminiClient" as Gemini #FEE2E2
+database "MongoDB" as DB #FEE2E2
+
+== POST /api/v1/chat ==
+
+Client -> Router : POST {message, history[]}\n+ X-Session-ID header
+activate Router
+
+Router -> Session : get(session_id)
+Session -> DB : FIND session
+DB --> Session : session (text, HTOC, BM25, pii_mapping)
+Session --> Router : Session
+
+alt htoc_status = "processing"
+    Router --> Client : **202** "Document still being processed"
+end
+
+== Step 1: Anonymize User Input ==
+
+Router -> PII : anonymize(user_message)
+activate PII
+PII --> Router : anon_question, question_mapping
+deactivate PII
+
+Router -> PII : anonymize(each history message)
+PII --> Router : anonymized_history[]
+
+== Step 2: Check Cache ==
+
+Router -> Router : compute_query_hash(\nsession_id, anon_question)
+
+Router -> Session : get_cached_chat(session_id, hash)
+Session -> DB : FIND chat_cache.{hash}
+
+alt Cache HIT
+    Session --> Router : cached {response, source_sections}
+    Router -> PII : deanonymize(response, pii_mapping)
+    PII --> Router : de-anonymized response
+    Router --> Client : **200** ChatResponse «cached»
+end
+
+== Step 3: Trim History ==
+
+Router -> Router : _trim_history(anon_history)\n• Keep last 8 messages\n• Summarize older into 1 context line
+
+== Step 4: Hybrid Retrieval ==
+
+Router -> Router : _build_search_query(\nquestion, last 2 exchanges)
+
+alt BM25 index available
+
+    Router -> BM25 : search(query, page_texts, top_k=5)
+    activate BM25
+    BM25 -> BM25 : Tokenize query
+    BM25 -> BM25 : BM25Okapi score all pages
+    BM25 -> BM25 : Boost scores with HTOC\n• title match: +3.0\n• summary match: +1.5
+    BM25 -> BM25 : Rank → top pages → group by sections
+    BM25 --> Router : {context, source_sections,\nconfidence, max_score}
+    deactivate BM25
+
+    note right of BM25 #FFF7ED
+        <b>BM25 is free & fast</b> (~5ms)
+        No API calls needed.
+        confidence: high (>2.0)
+                    medium (>0.5)
+                    low (<0.5)
+    end note
+
+    alt confidence = "low" AND HTOC exists
+
+        note right of Router #FFF7ED
+            BM25 unsure → escalate
+            to LLM tree search
+        end note
+
+        Router -> Tree : search(htoc_tree, query,\npage_texts, gemini, max_nodes=5)
+        activate Tree
+        Tree -> Tree : Strip text from tree\n(keep summaries only)
+        Tree -> Gemini : generate_json(tree + query)
+        activate Gemini
+        Gemini --> Tree : {reasoning, selected_nodes[],\nconfidence}
+        deactivate Gemini
+        Tree -> Tree : Extract page text from\nselected nodes
+        Tree -> Tree : Build source_sections[]\nTruncate at 50KB
+        Tree --> Router : {context, source_sections,\nreasoning}
+        deactivate Tree
+
+    end
+
+else No BM25 index yet (HTOC still building)
+    Router -> Router : Full-text fallback\nuse_fulltext = true
+end
+
+== Step 5: LLM Chat ==
+
+alt has partial context (from BM25/Tree)
+    Router -> Gemini : chat_with_context(\nquestion, context, history, source_info)
+    activate Gemini
+    Gemini -> Gemini : System prompt:\n• LawBuddy persona\n• Partial document context\n• Cite sources instruction
+else has full text
+    Router -> Gemini : chat(\nquestion, full_text, history)
+    activate Gemini
+    Gemini -> Gemini : System prompt:\n• Full document context
+end
+
+Gemini --> Router : response text
+deactivate Gemini
+
+== Step 6: De-anonymize & Cache ==
+
+Router -> PII : deanonymize(response,\nsession.pii_mapping)
+activate PII
+PII --> Router : final_response
+deactivate PII
+
+Router ->> Session : **async** cache_chat_response(\nsession_id, hash, response, sources)
+Session -> DB : UPDATE chat_cache.{hash}
+
+Router --> Client : **200** ChatResponse\n{response, source_sections[]}
+
+deactivate Router
+
+|||
+
+== POST /api/v1/chat/stream (SSE) ==
+
+note across #E0F2FE
+    Same flow as above through Step 4 (retrieval).
+    Step 5 uses **streaming** Gemini call instead.
+end note
+
+Client -> Router : POST /chat/stream
+activate Router
+
+Router -> Router : Steps 1-4 (same as above)
+
+Router --> Client : **event: sources**\n{source_sections: [...]}
+
+Router -> Gemini : chat_with_context_stream(...)
+activate Gemini
+
+loop streaming tokens
+    Gemini --> Router : text chunk
+    Router -> PII : deanonymize(chunk)
+    PII --> Router : clean chunk
+    Router --> Client : **event: token**\n{text: "chunk..."}
+end
+
+Gemini --> Router : stream complete
+deactivate Gemini
+
+Router ->> Session : cache full response
+Router --> Client : **event: done**\n{}
+
+deactivate Router
+
+@enduml

@@ -10,7 +10,7 @@ export const analysisApi = {
                 headers: {
                     'X-Session-ID': sessionId,
                 },
-                timeout: 60000, // 60s timeout for LLM analysis
+                timeout: 180000, // 3 min timeout for LLM analysis (large docs + rate limit retries)
             }
         );
         return data;

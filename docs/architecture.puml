@@ -1,0 +1,405 @@
+@startuml Legal Assist - Backend Architecture
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam roundCorner 12
+skinparam packageBorderColor #CBD5E1
+skinparam packageBackgroundColor #F8FAFC
+skinparam classBorderColor #64748B
+skinparam classBackgroundColor #FFFFFF
+skinparam classHeaderBackgroundColor #F1F5F9
+skinparam arrowColor #475569
+skinparam noteBorderColor #94A3B8
+skinparam noteBackgroundColor #FFF7ED
+skinparam stereotypeFontSize 10
+skinparam linetype ortho
+
+title **Legal Assist** — Backend Architecture (UML Component + Class Diagram)\n
+
+' ═══════════════════════════════════════════════════
+' LAYER 1: API ROUTES (FastAPI Routers)
+' ═══════════════════════════════════════════════════
+
+package "API Layer  «/api/v1»" as API #E0F2FE {
+
+    class "AuthRouter" as AuthRouter <<Router>> {
+        + POST /auth/register
+        + POST /auth/login
+    }
+
+    class "DocumentRouter" as DocRouter <<Router>> {
+        + POST /documents/upload
+        + GET  /documents/htoc-tree
+        + GET  /documents/htoc-status
+    }
+
+    class "AnalysisRouter" as AnalysisRouter <<Router>> {
+        + POST /analyze
+        + GET  /analyze/report
+    }
+
+    class "ChatRouter" as ChatRouter <<Router>> {
+        + POST /chat
+        + POST /chat/stream  «SSE»
+    }
+
+    class "HealthRouter" as HealthRouter <<Router>> {
+        + GET /health
+    }
+}
+
+' ═══════════════════════════════════════════════════
+' LAYER 2: CORE / MIDDLEWARE
+' ═══════════════════════════════════════════════════
+
+package "Core" as Core #FEF3C7 {
+
+    class "Settings" as Settings <<BaseSettings>> {
+        + MONGODB_URI : str
+        + GEMINI_API_KEY : str
+        + GEMINI_CHAT_API_KEY : str
+        + JWT_SECRET : str
+        + SESSION_TTL_SECONDS : int = 7200
+        + RATE_LIMIT_RPM : int = 30
+        + CORS_ORIGINS : List[str]
+        + ALLOWED_EXTENSIONS : List[str]
+    }
+
+    class "Dependencies" as Deps <<DI Container>> {
+        + get_gemini_client() : GeminiClient
+        + get_pii_service() : PIIAnonymizer
+        + get_parser() : DocumentParser
+        + get_session_service() : SessionService
+        + get_auth_service() : AuthService
+        + get_htoc_builder() : HTOCBuilder
+        + get_tree_search() : TreeSearchService
+        + get_bm25_search() : BM25SearchService
+        + get_current_user() : str  «JWT guard»
+    }
+
+    class "main.py" as Main <<FastAPI App>> {
+        + SlowAPI rate limiter
+        + CORS middleware
+        + /api/v1 prefix mount
+    }
+}
+
+' ═══════════════════════════════════════════════════
+' LAYER 3: SERVICES
+' ═══════════════════════════════════════════════════
+
+package "Service Layer" as Services #E8F5E9 {
+
+    class "AuthService" as AuthSvc {
+        - users_collection : Collection
+        --
+        + register(UserCreate) : UserInDB
+        + authenticate(email, password) : UserInDB
+        + create_access_token(email) : str  «JWT»
+        + decode_token(token) : str
+        + get_user_by_email(email) : UserInDB
+        - _hash_password(pwd) : str
+        - _verify_password(plain, hash) : bool
+    }
+
+    class "GeminiClient" as GeminiSvc {
+        - client : genai.Client
+        - chat_client : genai.Client
+        - MODEL = "gemini-2.5-flash"
+        --
+        + analyze_document(text, type) : Dict
+        + chat(question, context, history) : str
+        + chat_with_context(question, ctx, hist, src) : str
+        + chat_stream(question, ctx, hist) : AsyncGen
+        + chat_with_context_stream(...) : AsyncGen
+        + generate_json(prompt) : Dict
+        + detect_pii(text) : List  «unused»
+        --
+        - _get_analysis_prompt(type, doc) : str
+        - _build_chat_messages(ctx, hist, q) : list
+        - _clean_json_response(text) : str
+        - _repair_truncated_json(text) : Any
+        - _extract_json_bruteforce(text) : Any
+    }
+
+    class "DocumentParser" as ParserSvc {
+        - _page_count : int
+        - _needs_ocr : bool
+        - _page_texts : List[str]
+        --
+        + extract_async(content, type, doc_type, lang) : str
+        + page_count : int  «property»
+        + needs_ocr : bool  «property»
+        + page_texts : List[str]  «property»
+        --
+        - _extract_pdf_digital(content) : str
+        - _extract_pdf_scanned(content, lang) : str
+        - _gemini_ocr_page(img, idx, lang) : str
+        - _extract_docx(content) : str
+        - _chunk_paragraphs(paras, chars) : list
+    }
+
+    class "PIIAnonymizer" as PIISvc {
+        - _analyzer : AnalyzerEngine  «module-level»
+        - _nlp_engine : NlpEngine  «en_core_web_sm»
+        --
+        + anonymize(text) : (str, Dict)
+        + deanonymize(text, mapping) : str
+        + deanonymize_dict(data, mapping) : Any
+        --
+        - _anonymize_with_presidio(text) : (str, Dict)
+        - _resolve_overlaps(results) : list
+        ..Custom Indian Recognizers..
+        IN_AADHAAR, IN_PAN, IN_GSTIN
+        IN_VOTER_ID, IN_PASSPORT, IN_DL
+        IN_IFSC, IN_VEHICLE_REG, IN_PIN
+        PERSON (prefix), ORGANIZATION (suffix)
+    }
+
+    class "SessionService" as SessionSvc {
+        - sessions_collection : Collection
+        --
+        + create(...) : Session
+        + get(session_id) : Session
+        + update(session_id, data) : Session
+        + delete(session_id)
+        + save_analysis(sid, type, result)
+        + get_analysis(sid, type) : Dict
+        + update_htoc_and_bm25(sid, tree, bm25, status)
+        + set_htoc_status(sid, status)
+        + cache_chat_response(sid, hash, resp, src)
+        + get_cached_chat(sid, hash) : Dict
+    }
+
+    class "HTOCBuilder" as HTOCSvc {
+        + MAX_PAGES_PER_PROMPT = 100
+        + MAX_CHARS_PER_PAGE = 600
+        + SKIP_THRESHOLD = 3
+        --
+        + build_tree(pages, gemini) : Dict
+        --
+        - _build_tree_single(pages, gemini) : Dict
+        - _build_tree_chunked(pages, gemini) : Dict
+        - _create_page_previews(pages) : str
+        - _validate_tree(tree, n) : Dict
+        - _offset_pages(node, offset)
+        - _fallback_tree(pages) : Dict
+        - _simple_tree(pages) : Dict
+    }
+
+    class "TreeSearchService" as TreeSvc {
+        + MAX_CONTEXT_CHARS = 50000
+        --
+        + search(tree, query, pages, gemini) : Dict
+        + search_for_analysis(tree, pages, gemini) : str
+        --
+        - _build_structured_context(node, pages) : str
+        - _strip_text(node) : Dict
+        - _create_node_map(node) : Dict
+        - _get_top_level_ids(tree) : List
+        - _get_all_leaf_ids(node) : List
+    }
+
+    class "BM25SearchService" as BM25Svc {
+        - _index : BM25Okapi
+        - _page_tokens : List[List[str]]
+        - _htoc_nodes : List[Dict]
+        - _page_to_nodes : Dict
+        + LOW_SCORE_THRESHOLD = 0.5
+        --
+        + build_index(pages, htoc_tree)
+        + search(query, pages, top_k=5) : Dict
+        + get_serializable_data() : Dict
+        + load_from_data(data)
+        --
+        - _tokenize(text) : List[str]
+        - _flatten_tree(node) : List
+        - _build_page_node_map()
+    }
+
+    class "ReportGenerator" as ReportSvc <<module>> {
+        + create_pdf_from_analysis(data, name, type) : bytes
+        + get_ist_datetime() : str
+        --
+        Templates: template.html, template_short.html
+    }
+}
+
+' ═══════════════════════════════════════════════════
+' LAYER 4: MODELS (Pydantic)
+' ═══════════════════════════════════════════════════
+
+package "Models  «Pydantic»" as Models #F3E8FF {
+
+    class "UserCreate" as UC {
+        + email : EmailStr
+        + password : str
+        + full_name : str
+    }
+
+    class "UserInDB" as UID {
+        + email : str
+        + full_name : str
+        + hashed_password : str
+        + created_at : datetime
+        + is_active : bool
+    }
+
+    class "TokenResponse" as TR {
+        + access_token : str
+        + token_type : str = "bearer"
+        + user : UserResponse
+    }
+
+    class "Session" as SessionModel {
+        + session_id : str  «UUID»
+        + created_at : datetime
+        + expires_at : datetime
+        + pii_mapping : Dict[str, str]
+        + anonymized_text : Optional[str]
+        + page_texts : Optional[List[str]]
+        + htoc_tree : Optional[Dict]
+        + bm25_data : Optional[Dict]
+        + htoc_status : str
+        + document_metadata : Dict
+    }
+
+    class "AnalysisResponse" as AR {
+        + summary : str
+        + document_type : str
+        + parties : List[Party]
+        + key_clauses : List[Clause]
+        + risks : List[Risk]
+        + obligations : List[Obligation]
+        + missing_clauses : List[str]
+        + overall_risk_score : int  «0-100»
+    }
+
+    class "ChatRequest" as CReq {
+        + message : str
+        + history : List[ChatMessage]
+    }
+
+    class "ChatResponse" as CRes {
+        + response : str
+        + source_sections : List[SourceSection]
+    }
+
+    class "Risk" as RiskModel {
+        + risk_title : str
+        + severity : str  «high|medium|low»
+        + description : str
+        + recommendation : str
+    }
+
+    class "Clause" as ClauseModel {
+        + clause_title : str
+        + clause_text : str
+        + plain_english : str
+        + importance : str  «critical|important|standard»
+    }
+}
+
+' ═══════════════════════════════════════════════════
+' LAYER 5: EXTERNAL SYSTEMS
+' ═══════════════════════════════════════════════════
+
+package "External Systems" as External #FEE2E2 {
+
+    class "MongoDB Atlas" as Mongo <<database>> {
+        collections:
+        --
+        users
+        sessions  «TTL: 2h»
+    }
+
+    class "Google Gemini API" as Gemini <<cloud>> {
+        gemini-2.5-flash
+        --
+        Analysis (JSON mode)
+        Chat (streaming)
+        HTOC building
+        Tree search
+        Vision OCR
+    }
+
+    class "Microsoft Presidio" as Presidio <<local>> {
+        AnalyzerEngine
+        AnonymizerEngine
+        spaCy en_core_web_sm
+        12 Indian recognizers
+    }
+
+    class "WeasyPrint" as Weasy <<local>> {
+        HTML to PDF
+        Jinja2 templates
+    }
+
+    class "PyMuPDF" as PyMuPDF <<local>> {
+        PDF text extraction
+        PDF to PNG rendering
+    }
+}
+
+
+' ═══════════════════════════════════════════════════
+' RELATIONSHIPS
+' ═══════════════════════════════════════════════════
+
+' API → Services
+AuthRouter --> AuthSvc : authenticates
+DocRouter --> ParserSvc : parses documents
+DocRouter --> PIISvc : anonymizes PII
+DocRouter --> SessionSvc : creates sessions
+DocRouter --> HTOCSvc : builds HTOC «background»
+DocRouter --> BM25Svc : builds index «background»
+DocRouter --> GeminiSvc : OCR «scanned»
+
+AnalysisRouter --> GeminiSvc : analyzes
+AnalysisRouter --> TreeSvc : structured context
+AnalysisRouter --> SessionSvc : cache read/write
+AnalysisRouter --> PIISvc : de-anonymize
+AnalysisRouter --> ReportSvc : PDF generation
+
+ChatRouter --> GeminiSvc : chat + stream
+ChatRouter --> BM25Svc : keyword search
+ChatRouter --> TreeSvc : LLM fallback search
+ChatRouter --> SessionSvc : cache read/write
+ChatRouter --> PIISvc : anonymize/de-anonymize
+
+' Core wiring
+Main --> Deps : mounts routers
+Deps ..> AuthSvc : creates
+Deps ..> GeminiSvc : creates
+Deps ..> ParserSvc : creates
+Deps ..> PIISvc : creates
+Deps ..> SessionSvc : creates
+Deps ..> HTOCSvc : creates
+Deps ..> TreeSvc : creates
+Deps ..> BM25Svc : creates
+
+' Service → Service
+HTOCSvc --> GeminiSvc : generate_json()
+TreeSvc --> GeminiSvc : generate_json()
+ParserSvc --> GeminiSvc : OCR «scanned only»
+
+' Service → External
+AuthSvc --> Mongo : users CRUD
+SessionSvc --> Mongo : sessions CRUD
+GeminiSvc --> Gemini : REST API
+PIISvc --> Presidio : local analysis
+ReportSvc --> Weasy : render PDF
+ParserSvc --> PyMuPDF : extract/render
+
+' Model usage (light)
+AuthRouter ..> UC : input
+AuthRouter ..> TR : output
+DocRouter ..> SessionModel : creates
+AnalysisRouter ..> AR : output
+ChatRouter ..> CReq : input
+ChatRouter ..> CRes : output
+
+@enduml

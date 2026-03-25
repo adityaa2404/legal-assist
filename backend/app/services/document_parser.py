@@ -1,15 +1,31 @@
 import pymupdf  # PyMuPDF — reads electronic PDFs in any language natively
 import docx
 from fastapi import HTTPException
-from app.core.config import settings
 import io
-import os
-import tempfile
-import zipfile
 import logging
 import asyncio
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# PaddleOCR — fully local, no API calls
+# Lazy-loaded to avoid 400MB memory spike at startup
+_ocr_engine = None
+
+def _get_ocr(lang: str = "en"):
+    """Lazy-load PaddleOCR engine on first use."""
+    global _ocr_engine
+    if _ocr_engine is None or getattr(_ocr_engine, '_lang', 'en') != lang:
+        try:
+            import os
+            os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+            from paddleocr import PaddleOCR
+            _ocr_engine = PaddleOCR(use_angle_cls=True, lang=lang)
+            _ocr_engine._lang = lang  # track current lang
+            logger.info("PaddleOCR loaded (lang=%s)", lang)
+        except ImportError:
+            raise RuntimeError("PaddleOCR not installed. Run: pip install paddleocr paddlepaddle")
+    return _ocr_engine
 
 
 class DocumentParser:
@@ -22,7 +38,7 @@ class DocumentParser:
         """
         Extract text from documents.
         - doc_type="digital": PyMuPDF (fast, any language)
-        - doc_type="scanned": Sarvam AI Vision (22 Indian languages + English)
+        - doc_type="scanned": PaddleOCR (local, no API calls)
         """
         self._needs_ocr = False
         self._page_texts = []
@@ -53,98 +69,68 @@ class DocumentParser:
         return "\n\n".join(t for t in all_text if t)
 
     async def _extract_pdf_scanned(self, content: bytes, ocr_language: str = "en-IN") -> str:
-        """Extract text from scanned PDF using Sarvam AI — 22 Indian languages + English."""
+        """Extract text from scanned PDF using PaddleOCR (fully local, no API calls)."""
+        if not _ocr_engine:
+            raise HTTPException(500, "PaddleOCR not installed. Run: pip install paddleocr paddlepaddle")
+
         self._needs_ocr = True
 
-        if not settings.SARVAM_AI_API_KEY:
-            raise HTTPException(500, "Sarvam AI API key not configured for scanned document processing")
+        # Map language codes to PaddleOCR lang keys
+        lang_map = {
+            "en-IN": "en", "hi-IN": "hi", "ta-IN": "ta", "te-IN": "te",
+            "kn-IN": "kn", "ml-IN": "ml", "bn-IN": "bn", "gu-IN": "gu",
+            "mr-IN": "mr", "pa-IN": "pa", "ur-IN": "ur",
+        }
+        paddle_lang = lang_map.get(ocr_language, "en")
 
-        # Get page count from PyMuPDF
+        # Reload OCR engine if language changed from default
+        ocr = _ocr_engine
+        if paddle_lang != "en":
+            try:
+                ocr = PaddleOCR(use_angle_cls=True, lang=paddle_lang, show_log=False)
+            except Exception:
+                ocr = _ocr_engine  # fall back to English
+
+        # Render pages to images and OCR
         with pymupdf.open(stream=content, filetype="pdf") as doc:
             self._page_count = len(doc)
+            page_texts = []
 
-        logger.info("Scanned PDF — sending %d pages to Sarvam AI for OCR", self._page_count)
+            for i, page in enumerate(doc):
+                try:
+                    pix = page.get_pixmap(dpi=200)
+                    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                        pix.height, pix.width, pix.n
+                    )
+                    # RGB only (drop alpha if present)
+                    if pix.n == 4:
+                        img_array = img_array[:, :, :3]
 
-        page_texts = await self._ocr_with_sarvam(content, ocr_language)
+                    # Run OCR on numpy array
+                    result = await asyncio.to_thread(ocr.ocr, img_array, cls=True)
 
-        if not page_texts:
-            raise HTTPException(500, "Sarvam AI OCR returned no text. Please check the document.")
+                    # Extract text lines sorted by vertical position
+                    lines = []
+                    if result and result[0]:
+                        for line in result[0]:
+                            text = line[1][0] if line[1] else ""
+                            if text.strip():
+                                lines.append(text.strip())
+
+                    page_text = "\n".join(lines)
+                    page_texts.append(page_text)
+                except Exception as e:
+                    logger.warning("OCR failed for page %d: %s", i + 1, e)
+                    page_texts.append(f"[OCR failed for page {i + 1}]")
 
         self._page_texts = page_texts
-        self._page_count = len(page_texts)
-        return "\n\n".join(t for t in page_texts if t)
+        logger.info("PaddleOCR completed — %d pages", len(page_texts))
 
-    async def _ocr_with_sarvam(self, pdf_bytes: bytes, ocr_language: str = "en-IN") -> list:
-        """Use Sarvam AI Document Intelligence to OCR a scanned PDF."""
-        from sarvamai import SarvamAI
+        full_text = "\n\n".join(t for t in page_texts if t)
+        if not full_text.strip():
+            raise HTTPException(500, "OCR returned no text. The document may be empty or unreadable.")
 
-        try:
-            client = SarvamAI(api_subscription_key=settings.SARVAM_AI_API_KEY)
-
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(pdf_bytes)
-                tmp_path = tmp.name
-
-            try:
-                page_texts = await asyncio.to_thread(
-                    self._run_sarvam_job, client, tmp_path, ocr_language
-                )
-                return page_texts
-            finally:
-                os.unlink(tmp_path)
-
-        except Exception as e:
-            logger.error("Sarvam AI OCR failed: %s", e)
-            raise HTTPException(500, "Sarvam AI OCR failed: {}".format(str(e)))
-
-    def _run_sarvam_job(self, client, pdf_path: str, ocr_language: str = "en-IN") -> list:
-        """Run Sarvam Document Intelligence job (blocking — called via to_thread)."""
-        job = client.document_intelligence.create_job(
-            language=ocr_language,
-            output_format="md",
-        )
-        logger.info("Sarvam job created: %s", job.job_id)
-
-        job.upload_file(pdf_path)
-        job.start()
-        logger.info("Sarvam job started, waiting for completion...")
-
-        status = job.wait_until_complete()
-        logger.info("Sarvam job completed: %s", status.job_state)
-
-        if status.job_state.lower() != "completed":
-            raise Exception("Sarvam job failed with state: {}".format(status.job_state))
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_zip = os.path.join(tmpdir, "output.zip")
-            job.download_output(output_zip)
-
-            page_texts = []
-            with zipfile.ZipFile(output_zip, "r") as zf:
-                md_files = sorted(
-                    [f for f in zf.namelist() if f.endswith(".md")]
-                )
-                # Sarvam may return one .md with --- page breaks,
-                # or multiple .md files (one per page)
-                all_text = []
-                for md_file in md_files:
-                    text = zf.read(md_file).decode("utf-8", errors="replace").strip()
-                    all_text.append(text)
-
-                combined = "\n\n".join(all_text)
-
-                if len(md_files) > 1:
-                    # Multiple files = one per page
-                    page_texts = [t.strip() for t in all_text if t.strip()]
-                else:
-                    # Single file — split on markdown horizontal rule (page break)
-                    # Sarvam uses \n---\n between pages
-                    import re
-                    parts = re.split(r'\n---\n', combined)
-                    page_texts = [p.strip() for p in parts if p.strip()]
-
-            logger.info("Sarvam extracted %d pages of text", len(page_texts))
-            return page_texts
+        return full_text
 
     def _extract_docx(self, content: bytes) -> str:
         doc = docx.Document(io.BytesIO(content))

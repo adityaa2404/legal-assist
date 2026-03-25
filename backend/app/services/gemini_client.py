@@ -2,19 +2,42 @@ from google import genai
 from google.genai import types
 from app.core.config import settings
 from typing import Dict, Any, List
+import asyncio
 import json
 import logging
 import re
 
-# Create a global async client instance
+# Separate clients: analysis/HTOC/OCR vs chat — each gets its own RPM quota
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
+chat_client = genai.Client(api_key=settings.GEMINI_CHAT_API_KEY) if settings.GEMINI_CHAT_API_KEY else client
 
 MODEL = "gemini-2.5-flash"
+
+# Rate limit retry settings
+MAX_RETRIES = 3
+BASE_RETRY_DELAY = 15  # seconds — free tier allows 5 req/min
+
+
+async def _retry_on_rate_limit(coro_fn, max_retries=MAX_RETRIES):
+    """Retry a Gemini API call with exponential backoff on 429 errors."""
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_fn()
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                if attempt < max_retries:
+                    delay = BASE_RETRY_DELAY * (attempt + 1)
+                    logging.warning(f"Rate limited (attempt {attempt + 1}), retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                    continue
+            raise
 
 
 class GeminiClient:
     def __init__(self):
-        self.client = client
+        self.client = client           # analysis, HTOC, OCR
+        self.chat_client = chat_client  # chat uses separate key (if configured)
 
     async def analyze_document(self, anonymized_text: str, analysis_type: str) -> Dict[str, Any]:
         prompt = self._get_analysis_prompt(analysis_type, anonymized_text)
@@ -73,6 +96,101 @@ class GeminiClient:
             logging.error("Gemini analysis error: %s", str(e))
             raise
 
+    def _extract_json_bruteforce(self, text: str) -> Any:
+        """Last-resort: find the outermost { ... } or [ ... ] and parse it."""
+        text = text.strip()
+        # Strip markdown fences
+        text = re.sub(r"^```(?:json)?\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+        text = text.strip()
+        # Find first { and last }
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end > start:
+            candidate = text[start:end + 1]
+            # Fix trailing commas
+            candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
+            try:
+                return json.loads(candidate, strict=False)
+            except json.JSONDecodeError:
+                pass
+
+        # Handle truncated JSON — close unclosed strings/brackets
+        if start != -1:
+            candidate = text[start:]
+            result = self._repair_truncated_json(candidate)
+            if result is not None:
+                return result
+        return None
+
+    def _repair_truncated_json(self, text: str) -> Any:
+        """Attempt to repair JSON truncated mid-output by closing open structures."""
+        # Fix trailing commas
+        text = re.sub(r',\s*([}\]])', r'\1', text)
+
+        # Check if we're inside an unclosed string — close it
+        in_string = False
+        escaped = False
+        for ch in text:
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+
+        if in_string:
+            # Truncate back to the last clean line before the broken string,
+            # or just close the string
+            text = text.rstrip()
+            # Remove the partial string value — find the last complete key-value
+            last_quote = text.rfind('"')
+            if last_quote > 0:
+                # Close the string and truncate any trailing partial value
+                text = text[:last_quote + 1]
+                # If we ended on a key (with : after), drop the key too
+                if text.rstrip().endswith(':'):
+                    # Remove the dangling key
+                    text = text[:text.rfind('"', 0, last_quote)]
+                    last_quote2 = text.rfind('"')
+                    if last_quote2 >= 0:
+                        text = text[:last_quote2 + 1]
+
+        # Remove any trailing comma
+        text = text.rstrip().rstrip(',')
+
+        # Close any unclosed brackets/braces
+        stack = []
+        in_str = False
+        esc = False
+        for ch in text:
+            if esc:
+                esc = False
+                continue
+            if ch == '\\' and in_str:
+                esc = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch in ('{', '['):
+                stack.append('}' if ch == '{' else ']')
+            elif ch in ('}', ']'):
+                if stack:
+                    stack.pop()
+
+        # Close unclosed structures
+        text += ''.join(reversed(stack))
+
+        try:
+            return json.loads(text, strict=False)
+        except json.JSONDecodeError:
+            return None
+
     def _clean_json_response(self, text: str) -> str:
         """Clean and repair Gemini JSON output."""
         text = text.strip()
@@ -108,23 +226,60 @@ class GeminiClient:
         return '\n'.join(repaired)
 
     async def chat(self, anonymized_question: str, anonymized_context: str, chat_history: List[Dict[str, str]]) -> str:
-        messages = self._build_chat_messages(anonymized_context, chat_history, anonymized_question)
+        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
 
-        response = await self.client.aio.models.generate_content(
+YOUR ROLE:
+You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.
+
+THE DOCUMENT:
+Below is the full text of the user's uploaded legal document. This is the ONLY source of truth — do not rely on outside legal knowledge, assumptions, or general legal principles.
+
+--- BEGIN DOCUMENT ---
+{anonymized_context}
+--- END DOCUMENT ---
+
+HOW TO ANSWER:
+1. **Ground every answer in the document.** Cite the specific clause, section, or page. Example: "According to Clause 5.2 (Page 3), the notice period is 30 days."
+2. **Quote when it helps.** For important points, include a short direct quote: "The agreement states: '...exact text...' (Clause 4, Page 2)."
+3. **Explain like the user is not a lawyer.** Replace jargon with plain language. If a term like "indemnification" or "force majeure" appears, explain what it actually means for the user in 1 line.
+4. **Be structured.** Use bullet points for lists, bold for key terms, and keep paragraphs short. If the answer has multiple parts, number them.
+5. **Flag what matters.** If a clause is unusually risky, one-sided, or missing standard protections, proactively mention it. Example: "Note: This clause allows the landlord to terminate without notice — this is unusual and worth discussing with a lawyer."
+6. **Say when you don't know.** If the answer isn't in the document, say: "I couldn't find this information in the document. It may not be covered, or you may want to ask the other party / consult a lawyer."
+7. **Never fabricate.** Do not invent clauses, dates, amounts, or obligations that are not in the document.
+
+PRIVACY:
+The document uses anonymized placeholders like [PERSON_1], [ORG_1], [AADHAAR_1]. Use these exactly as-is — never attempt to guess the real values.
+
+TONE:
+Helpful, clear, and approachable — like a knowledgeable friend who reads legal documents for you. Not robotic, not overly formal. Use Indian English conventions where appropriate (e.g., ₹ for currency, "lakh/crore" for amounts)."""
+
+        messages = self._build_chat_messages(system_context, chat_history, anonymized_question)
+
+        response = await self.chat_client.aio.models.generate_content(
             model=MODEL,
             contents=messages,
+            config=types.GenerateContentConfig(
+                safety_settings=[
+                    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                ],
+            ),
         )
         return response.text
 
     async def generate_json(self, prompt: str) -> Dict[str, Any]:
-        """Generic JSON generation method used by HTOC builder and tree search."""
-        try:
+        """Generic JSON generation method used by HTOC builder and tree search.
+        Includes automatic retry on 429 rate limit errors."""
+        async def _call():
             response = await self.client.aio.models.generate_content(
                 model=MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0,
+                    max_output_tokens=65536,
                     safety_settings=[
                         types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
                         types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
@@ -133,41 +288,81 @@ class GeminiClient:
                     ],
                 ),
             )
-
             if not response.text:
                 raise Exception("AI returned empty response")
+            return response
+
+        try:
+            response = await _retry_on_rate_limit(_call)
 
             clean_text = self._clean_json_response(response.text)
             return json.loads(clean_text, strict=False)
         except json.JSONDecodeError as e:
-            logging.error(f"JSON Decode Error in generate_json: {e}")
-            raise Exception(f"AI returned invalid JSON: {str(e)}")
+            logging.warning(f"JSON parse failed in generate_json: {e} — retrying")
+            # Retry once: Gemini is non-deterministic, second call often produces valid JSON
+            try:
+                response2 = await _retry_on_rate_limit(_call)
+                clean_text2 = self._clean_json_response(response2.text)
+                return json.loads(clean_text2, strict=False)
+            except json.JSONDecodeError as e2:
+                # Last resort: try to extract JSON object/array from the messy response
+                raw = response.text if response and response.text else ""
+                extracted = self._extract_json_bruteforce(raw)
+                if extracted is not None:
+                    return extracted
+                logging.error(f"JSON Decode Error after retry in generate_json: {e2}")
+                raise Exception(f"AI returned invalid JSON: {str(e2)}")
+            except Exception:
+                raise
         except Exception as e:
             logging.error(f"Gemini generate_json error: {str(e)}")
             raise
 
     async def chat_with_context(self, question: str, context: str, chat_history: List[Dict[str, str]], source_info: str = "") -> str:
         """Chat using targeted context from tree search (vectorless RAG)."""
-        system_context = f"""You are legal-assist AI, an expert legal document assistant.
-You have been provided with SPECIFIC SECTIONS of a legal document that are relevant to the user's question.
-These sections were identified by analyzing the document's hierarchical structure.
+        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
+
+YOUR ROLE:
+You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.
+
+IMPORTANT — PARTIAL CONTEXT:
+You do NOT have the full document. You have been given only the sections most likely to answer the user's question. If the answer isn't here, it may exist in other parts of the document you cannot see right now.
 
 RELEVANT DOCUMENT SECTIONS:
 {context}
 
-{f"Source: {source_info}" if source_info else ""}
+{f"These sections come from: {source_info}" if source_info else ""}
 
-INSTRUCTIONS:
-- Answer the user's question based ONLY on the provided document sections
-- If the answer is not in the provided sections, say so clearly
-- Reference specific page numbers and section names when possible
-- Use the anonymized placeholders as-is (e.g., [PERSON_1])"""
+HOW TO ANSWER:
+1. **Ground every answer in the sections above.** Cite the specific section name and page number inline. Example: "According to the Termination Clause (Page 5), either party can exit with 30 days' written notice."
+2. **Quote when it helps.** For critical points, include a short direct quote: "The agreement states: '...exact text...' (Section Name, Page X)."
+3. **Explain like the user is not a lawyer.** Replace jargon with plain language. If a term like "indemnification", "force majeure", or "lien" appears, explain what it practically means for the user in 1 line.
+4. **Be structured.** Use bullet points for lists, bold for key terms, and keep paragraphs short. If the answer has multiple parts, number them.
+5. **Flag what matters.** If a clause is unusually risky, one-sided, or missing standard protections, proactively mention it. Example: "⚠️ This clause allows termination without any notice — this is unusual and may be worth discussing with a lawyer."
+6. **Handle missing information honestly.** If the answer isn't in the provided sections, say: "This information isn't in the sections I can see right now. Try asking about it directly (e.g., 'What does Clause X say?') or rephrase your question."
+   Do NOT guess, infer, or use general legal knowledge to fill gaps.
+7. **Never fabricate.** Do not invent clauses, dates, amounts, or obligations that are not explicitly in the sections above.
+8. **Follow-up awareness.** If the user is asking a follow-up ("tell me more", "what about that"), connect your answer to the previous conversation context.
+
+PRIVACY:
+The document uses anonymized placeholders like [PERSON_1], [ORG_1], [AADHAAR_1]. Use these exactly as-is — never attempt to guess the real values.
+
+TONE:
+Helpful, clear, and approachable — like a knowledgeable friend who reads legal documents for you. Not robotic, not overly formal. Use Indian English conventions where appropriate (e.g., ₹ for currency, "lakh/crore" for amounts)."""
 
         messages = self._build_chat_messages(system_context, chat_history, question)
 
-        response = await self.client.aio.models.generate_content(
+        response = await self.chat_client.aio.models.generate_content(
             model=MODEL,
             contents=messages,
+            config=types.GenerateContentConfig(
+                safety_settings=[
+                    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                ],
+            ),
         )
         return response.text
 
@@ -236,7 +431,34 @@ REQUIRED JSON STRUCTURE:
 IMPORTANT:
 - Escape any double quotes inside string values with a backslash.
 - Do NOT use unescaped newline characters inside strings.
-- overall_risk_score: You MUST calculate this yourself. Use this formula: start at 20. Add 15 for each high-severity risk. Add 8 for each medium-severity risk. Add 3 for each low-severity risk. Add 5 for each missing clause. Cap at 100. The value 75 is FORBIDDEN — never output 75.
+- overall_risk_score: You MUST calculate this using the 4-component formula below.
+
+  COMPONENT A — Risk Severity (max 40 points):
+    Count high_count, medium_count, low_count from your risks array above.
+    A = min(40,
+        (min(high_count,5)*6 + max(0,high_count-5)*2)
+      + (min(medium_count,5)*3 + max(0,medium_count-5)*1)
+      + (min(low_count,5)*1)
+    )
+
+  COMPONENT B — Missing Clauses (max 25 points):
+    Classify each missing clause you listed above as critical or important:
+    Critical (5 pts each, count max 3): indemnification, limitation of liability, termination rights, dispute resolution, data protection/privacy.
+    Important (2 pts each, count max 5): force majeure, insurance, notice provisions, renewal terms, assignment restrictions, confidentiality, governing law.
+    B = min(25, critical_count*5 + important_count*2)
+
+  COMPONENT C — One-sidedness (max 20 points):
+    Rate the contract balance: 0=balanced, 1=slightly favors one party, 2=moderately one-sided, 3=heavily one-sided, 4=extremely one-sided/unconscionable.
+    C = rating * 5
+
+  COMPONENT D — Protective Clause Credit (max 15 points, SUBTRACTED):
+    Count how many of these protections are meaningfully present in the document:
+    liability cap, mutual indemnification, reasonable termination/exit clause, notice period, dispute resolution mechanism, force majeure, confidentiality, cure/remedy period before default.
+    D = min(15, count * 2)
+
+  FINAL: overall_risk_score = max(5, min(95, A + B + C - D))
+
+  Expected ranges: well-drafted contract = 10-30, moderate gaps = 35-50, one-sided with serious gaps = 55-75, truly dangerous = 80-95.
 - RETURN ONLY THE JSON OBJECT.
 
 Document:
@@ -282,7 +504,34 @@ IMPORTANT:
 - Do NOT use unescaped newline characters inside strings.
 - The document uses anonymized placeholders like [PERSON_1], [AADHAAR_1], etc. Use these placeholders as-is in your response.
 - Do NOT attempt to guess the real values.
-- overall_risk_score: You MUST calculate this yourself. Use this formula: start at 20. Add 15 for each high-severity risk. Add 8 for each medium-severity risk. Add 3 for each low-severity risk. Add 5 for each missing clause. Cap at 100. The value 75 is FORBIDDEN — never output 75.
+- overall_risk_score: You MUST calculate this using the 4-component formula below.
+
+  COMPONENT A — Risk Severity (max 40 points):
+    Count high_count, medium_count, low_count from your risks array above.
+    A = min(40,
+        (min(high_count,5)*6 + max(0,high_count-5)*2)
+      + (min(medium_count,5)*3 + max(0,medium_count-5)*1)
+      + (min(low_count,5)*1)
+    )
+
+  COMPONENT B — Missing Clauses (max 25 points):
+    Classify each missing clause you listed above as critical or important:
+    Critical (5 pts each, count max 3): indemnification, limitation of liability, termination rights, dispute resolution, data protection/privacy.
+    Important (2 pts each, count max 5): force majeure, insurance, notice provisions, renewal terms, assignment restrictions, confidentiality, governing law.
+    B = min(25, critical_count*5 + important_count*2)
+
+  COMPONENT C — One-sidedness (max 20 points):
+    Rate the contract balance: 0=balanced, 1=slightly favors one party, 2=moderately one-sided, 3=heavily one-sided, 4=extremely one-sided/unconscionable.
+    C = rating * 5
+
+  COMPONENT D — Protective Clause Credit (max 15 points, SUBTRACTED):
+    Count how many of these protections are meaningfully present in the document:
+    liability cap, mutual indemnification, reasonable termination/exit clause, notice period, dispute resolution mechanism, force majeure, confidentiality, cure/remedy period before default.
+    D = min(15, count * 2)
+
+  FINAL: overall_risk_score = max(5, min(95, A + B + C - D))
+
+  Expected ranges: well-drafted contract = 10-30, moderate gaps = 35-50, one-sided with serious gaps = 55-75, truly dangerous = 80-95.
 - RETURN ONLY THE JSON OBJECT.
 
 Document:
@@ -290,9 +539,109 @@ Document:
 """
         return ANALYSIS_PROMPT
 
+    async def chat_with_context_stream(self, question: str, context: str, chat_history: List[Dict[str, str]], source_info: str = ""):
+        """Streaming version of chat_with_context. Yields text chunks as they arrive."""
+        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
+
+YOUR ROLE:
+You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.
+
+IMPORTANT — PARTIAL CONTEXT:
+You do NOT have the full document. You have been given only the sections most likely to answer the user's question. If the answer isn't here, it may exist in other parts of the document you cannot see right now.
+
+RELEVANT DOCUMENT SECTIONS:
+{context}
+
+{f"These sections come from: {source_info}" if source_info else ""}
+
+HOW TO ANSWER:
+1. **Ground every answer in the sections above.** Cite the specific section name and page number inline. Example: "According to the Termination Clause (Page 5), either party can exit with 30 days' written notice."
+2. **Quote when it helps.** For critical points, include a short direct quote: "The agreement states: '...exact text...' (Section Name, Page X)."
+3. **Explain like the user is not a lawyer.** Replace jargon with plain language. If a term like "indemnification", "force majeure", or "lien" appears, explain what it practically means for the user in 1 line.
+4. **Be structured.** Use bullet points for lists, bold for key terms, and keep paragraphs short. If the answer has multiple parts, number them.
+5. **Flag what matters.** If a clause is unusually risky, one-sided, or missing standard protections, proactively mention it.
+6. **Handle missing information honestly.** If the answer isn't in the provided sections, say: "This information isn't in the sections I can see right now. Try asking about it directly (e.g., 'What does Clause X say?') or rephrase your question."
+   Do NOT guess, infer, or use general legal knowledge to fill gaps.
+7. **Never fabricate.** Do not invent clauses, dates, amounts, or obligations that are not explicitly in the sections above.
+8. **Follow-up awareness.** If the user is asking a follow-up ("tell me more", "what about that"), connect your answer to the previous conversation context.
+
+PRIVACY:
+The document uses anonymized placeholders like [PERSON_1], [ORG_1], [AADHAAR_1]. Use these exactly as-is — never attempt to guess the real values.
+
+TONE:
+Helpful, clear, and approachable — like a knowledgeable friend who reads legal documents for you. Not robotic, not overly formal. Use Indian English conventions where appropriate (e.g., ₹ for currency, "lakh/crore" for amounts)."""
+
+        messages = self._build_chat_messages(system_context, chat_history, question)
+
+        stream = await self.chat_client.aio.models.generate_content_stream(
+            model=MODEL,
+            contents=messages,
+            config=types.GenerateContentConfig(
+                safety_settings=[
+                    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                ],
+            ),
+        )
+        async for chunk in stream:
+            if chunk.text:
+                yield chunk.text
+
+    async def chat_stream(self, anonymized_question: str, anonymized_context: str, chat_history: List[Dict[str, str]]):
+        """Streaming version of chat (full-text fallback). Yields text chunks."""
+        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
+
+YOUR ROLE:
+You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.
+
+THE DOCUMENT:
+Below is the full text of the user's uploaded legal document. This is the ONLY source of truth — do not rely on outside legal knowledge, assumptions, or general legal principles.
+
+--- BEGIN DOCUMENT ---
+{anonymized_context}
+--- END DOCUMENT ---
+
+HOW TO ANSWER:
+1. **Ground every answer in the document.** Cite the specific clause, section, or page. Example: "According to Clause 5.2 (Page 3), the notice period is 30 days."
+2. **Quote when it helps.** For important points, include a short direct quote: "The agreement states: '...exact text...' (Clause 4, Page 2)."
+3. **Explain like the user is not a lawyer.** Replace jargon with plain language. If a term like "indemnification" or "force majeure" appears, explain what it actually means for the user in 1 line.
+4. **Be structured.** Use bullet points for lists, bold for key terms, and keep paragraphs short. If the answer has multiple parts, number them.
+5. **Flag what matters.** If a clause is unusually risky, one-sided, or missing standard protections, proactively mention it.
+6. **Say when you don't know.** If the answer isn't in the document, say: "I couldn't find this information in the document. It may not be covered, or you may want to ask the other party / consult a lawyer."
+7. **Never fabricate.** Do not invent clauses, dates, amounts, or obligations that are not in the document.
+
+PRIVACY:
+The document uses anonymized placeholders like [PERSON_1], [ORG_1], [AADHAAR_1]. Use these exactly as-is — never attempt to guess the real values.
+
+TONE:
+Helpful, clear, and approachable — like a knowledgeable friend who reads legal documents for you. Not robotic, not overly formal. Use Indian English conventions where appropriate (e.g., ₹ for currency, "lakh/crore" for amounts)."""
+
+        messages = self._build_chat_messages(system_context, chat_history, anonymized_question)
+
+        stream = await self.chat_client.aio.models.generate_content_stream(
+            model=MODEL,
+            contents=messages,
+            config=types.GenerateContentConfig(
+                safety_settings=[
+                    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                ],
+            ),
+        )
+        async for chunk in stream:
+            if chunk.text:
+                yield chunk.text
+
     def _build_chat_messages(self, context: str, history: List[Dict[str, str]], question: str) -> list:
+        # Send system context as user message, with a model acknowledgment
+        # so the LLM treats it as grounding rather than a user query
         contents = [
-            types.Content(role="user", parts=[types.Part.from_text(text=f"Document Context:\n{context}")])
+            types.Content(role="user", parts=[types.Part.from_text(text=f"System Instructions & Document Context:\n{context}")]),
+            types.Content(role="model", parts=[types.Part.from_text(text="Understood. I have the document context and will answer based only on the provided sections. How can I help you?")]),
         ]
 
         for msg in history:

@@ -1,0 +1,92 @@
+@startuml Legal Assist - Backend Architecture (Compact)
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam packageStyle rectangle
+skinparam linetype polyline
+skinparam nodesep 60
+skinparam ranksep 50
+
+title **Legal Assist** — Backend Architecture\n
+
+' ═══════════ ACTORS ═══════════
+actor "User\n(React SPA)" as User #E0F2FE
+
+' ═══════════ API LAYER ═══════════
+rectangle "**API Layer** (FastAPI)" as API #DBEAFE {
+    card "POST /auth/register\nPOST /auth/login" as Auth
+    card "POST /documents/upload\nGET  /documents/htoc-status" as Docs
+    card "POST /analyze\nGET  /analyze/report" as Analysis
+    card "POST /chat/stream\nPOST /chat" as Chat
+}
+
+' ═══════════ SERVICE LAYER ═══════════
+rectangle "**Services**" as SVC #E8F5E9 {
+    card "**AuthService**\nJWT + bcrypt" as AuthSvc
+    card "**DocumentParser**\nPyMuPDF · DOCX\nGemini Vision OCR" as Parser
+    card "**PIIAnonymizer**\nPresidio (local)\n12 Indian recognizers" as PII
+    card "**SessionService**\nCRUD · caching\nTTL: 2h" as Session
+    card "**HTOCBuilder**\nHierarchical TOC\nvia LLM reasoning" as HTOC
+    card "**BM25Search**\nBM25Okapi\n+ HTOC boost" as BM25
+    card "**TreeSearch**\nLLM navigates\nHTOC tree" as Tree
+    card "**GeminiClient**\nAnalysis · Chat\nJSON · OCR" as Gemini
+    card "**ReportGenerator**\nJinja2 → WeasyPrint\n→ PDF" as Report
+}
+
+' ═══════════ EXTERNAL ═══════════
+database "MongoDB Atlas\n(users + sessions)" as Mongo #FEE2E2
+cloud "Gemini 2.5 Flash\n(Free Tier)" as GeminiAPI #FEE2E2
+component "Presidio + spaCy\nen_core_web_sm (local)" as PresidioLocal #F3E8FF
+
+' ═══════════ CONNECTIONS ═══════════
+User --> API : HTTPS + JWT
+
+Auth --> AuthSvc
+Docs --> Parser
+Docs --> PII
+Docs --> Session
+Docs --> HTOC : background
+Docs --> BM25 : background
+
+Analysis --> Gemini
+Analysis --> Tree
+Analysis --> PII
+Analysis --> Session
+Analysis --> Report
+
+Chat --> BM25 : "1. keyword search"
+Chat --> Tree : "2. LLM fallback"
+Chat --> Gemini : "3. chat"
+Chat --> PII
+Chat --> Session
+
+' Service → External
+AuthSvc --> Mongo
+Session --> Mongo
+Gemini --> GeminiAPI
+HTOC --> GeminiAPI
+Tree --> GeminiAPI
+Parser ..> GeminiAPI : OCR (scanned only)
+PII --> PresidioLocal
+
+' ═══════════ NOTES ═══════════
+note bottom of BM25
+  **Hybrid RAG Flow:**
+  BM25 (free, <5ms)
+  → low confidence?
+  → LLM tree search
+  → Gemini chat
+end note
+
+note bottom of PII
+  **Zero external PII**
+  All anonymization local.
+  Aadhaar, PAN, GSTIN,
+  Voter ID, Passport, etc.
+end note
+
+@enduml

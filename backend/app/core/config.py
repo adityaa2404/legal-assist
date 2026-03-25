@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     MONGO_DB_NAME: str = "legal-assist"
     
     # GEMINI config
-    GEMINI_API_KEY: str
+    GEMINI_API_KEY: str           # Used for analysis, HTOC, chat
+    GEMINI_CHAT_API_KEY: Optional[str] = None  # Separate key for chat (avoids RPM competition)
     
     # JWT config
     JWT_SECRET: str
@@ -23,8 +24,7 @@ class Settings(BaseSettings):
     # CORS config
     CORS_ORIGINS: List[str] = ["http://localhost", "https://legal-assist.ai", "http://localhost:5173"]
     
-    # SARVAM AI config (multilingual OCR for scanned documents)
-    SARVAM_AI_API_KEY: Optional[str] = None
+    # OCR is now handled by PaddleOCR (local, no API key needed)
 
     # RATE LIMIT config
     RATE_LIMIT_RPM: int = 30
@@ -32,5 +32,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 settings = Settings()

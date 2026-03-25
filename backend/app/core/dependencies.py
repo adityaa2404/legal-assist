@@ -5,6 +5,7 @@ from app.services.gemini_client import GeminiClient
 from app.services.auth_service import AuthService
 from app.services.htoc_builder import HTOCBuilder
 from app.services.tree_search import TreeSearchService
+from app.services.bm25_search import BM25SearchService
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -32,6 +33,9 @@ def get_htoc_builder() -> HTOCBuilder:
 
 def get_tree_search() -> TreeSearchService:
     return TreeSearchService()
+
+def get_bm25_search() -> BM25SearchService:
+    return BM25SearchService()
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
