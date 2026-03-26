@@ -204,7 +204,7 @@ async def upload_document(
             htoc_status="processing",
         )
 
-    # ── DIGITAL PATH: parse + PII are fast, only HTOC is backgrounded ──
+    # ── DIGITAL PATH ──
 
     # 3. Extract text (fast — PyMuPDF, no API calls)
     try:
@@ -212,15 +212,52 @@ async def upload_document(
     except Exception as e:
         raise HTTPException(500, f"Failed to parse document: {str(e)}")
 
-    # 4. Anonymize PII
     raw_page_texts = parser.page_texts
     joined_with_separators = PAGE_SEPARATOR.join(raw_page_texts)
+
+    # Large docs (>500K chars): PII is slow, run everything in background
+    LARGE_DOC_THRESHOLD = 500_000
+    if len(joined_with_separators) > LARGE_DOC_THRESHOLD:
+        logger.info("Large digital doc (%d chars) — backgrounding PII + HTOC", len(joined_with_separators))
+
+        session = await session_service.create(
+            pii_mapping={},
+            anonymized_text="",
+            page_texts=[],
+            htoc_tree=None,
+            htoc_status="processing",
+            document_metadata={
+                "filename": file.filename,
+                "page_count": parser.page_count,
+                "size_bytes": len(content),
+                "needs_ocr": False,
+            }
+        )
+
+        asyncio.create_task(
+            _process_document_background(
+                session.session_id, content, file.content_type,
+                doc_type, ocr_language, pii_service, gemini,
+                htoc_builder, session_service,
+            )
+        )
+
+        return UploadResponse(
+            session_id=session.session_id,
+            filename=file.filename,
+            page_count=parser.page_count,
+            detected_pii_count=0,
+            needs_ocr=False,
+            expires_in_seconds=settings.SESSION_TTL_SECONDS,
+            htoc_status="processing",
+        )
+
+    # 4. Small docs: PII inline (fast), only HTOC backgrounded
     anonymized_joined, pii_mapping = await pii_service.anonymize(joined_with_separators)
 
     anonymized_pages = anonymized_joined.split(PAGE_SEPARATOR)
     anonymized_text = "\n\n".join(anonymized_pages)
 
-    # 5. Create session immediately
     session = await session_service.create(
         pii_mapping=pii_mapping,
         anonymized_text=anonymized_text,
@@ -235,7 +272,6 @@ async def upload_document(
         }
     )
 
-    # 6. Launch HTOC + BM25 build in background
     asyncio.create_task(
         _build_htoc_and_bm25(
             session.session_id, anonymized_pages, gemini, htoc_builder, session_service

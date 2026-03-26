@@ -67,3 +67,14 @@ class AuthService:
         if user_doc:
             return UserInDB(**user_doc)
         return None
+
+    async def delete_account(self, email: str) -> bool:
+        """Delete user and all associated data."""
+        db = get_database()
+        result = await self.collection.delete_one({"email": email})
+        if result.deleted_count == 0:
+            return False
+        # Clean up user's data across collections
+        await db.analysis_history.delete_many({"user_email": email})
+        await db.clause_library.delete_many({"user_email": email})
+        return True

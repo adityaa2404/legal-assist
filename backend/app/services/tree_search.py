@@ -145,6 +145,8 @@ SELECTION RULES:
             "reasoning": reasoning,
         }
 
+    MAX_ANALYSIS_CHARS = 25000  # Cap context to prevent Gemini timeout on large docs
+
     async def search_for_analysis(
         self,
         tree: Dict[str, Any],
@@ -159,7 +161,14 @@ SELECTION RULES:
         Returns:
             Structured text with section headers and page references
         """
-        return self._build_structured_context(tree, page_texts)
+        context = self._build_structured_context(tree, page_texts)
+        if len(context) > self.MAX_ANALYSIS_CHARS:
+            truncated = context[:self.MAX_ANALYSIS_CHARS]
+            last_period = max(truncated.rfind('. '), truncated.rfind('.\n'))
+            if last_period > self.MAX_ANALYSIS_CHARS * 0.8:
+                truncated = truncated[:last_period + 1]
+            context = truncated + f"\n\n[Truncated: showing {self.MAX_ANALYSIS_CHARS // 1000}K of {len(context) // 1000}K chars. Key sections above cover the document structure.]"
+        return context
 
     def _build_structured_context(
         self, node: Dict, page_texts: List[str], depth: int = 0

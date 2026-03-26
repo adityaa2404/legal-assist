@@ -18,19 +18,9 @@ const OCR_LANGUAGES = [
     { code: 'kn-IN', label: 'Kannada (\u0C95\u0CA8\u0CCD\u0CA8\u0CA1)' },
     { code: 'ml-IN', label: 'Malayalam (\u0D2E\u0D32\u0D2F\u0D3E\u0D33\u0D02)' },
     { code: 'pa-IN', label: 'Punjabi (\u0A2A\u0A70\u0A1C\u0A3E\u0A2C\u0A40)' },
-    { code: 'or-IN', label: 'Odia (\u0B13\u0B21\u0B3C\u0B3F\u0B06)' },
     { code: 'ur-IN', label: 'Urdu' },
     { code: 'as-IN', label: 'Assamese' },
-    { code: 'sa-IN', label: 'Sanskrit' },
     { code: 'ne-IN', label: 'Nepali' },
-    { code: 'kok-IN', label: 'Konkani' },
-    { code: 'mai-IN', label: 'Maithili' },
-    { code: 'doi-IN', label: 'Dogri' },
-    { code: 'ks-IN', label: 'Kashmiri' },
-    { code: 'sd-IN', label: 'Sindhi' },
-    { code: 'mni-IN', label: 'Manipuri' },
-    { code: 'sat-IN', label: 'Santali' },
-    { code: 'bodo-IN', label: 'Bodo' },
 ];
 
 interface ProcessingStage {
@@ -40,18 +30,16 @@ interface ProcessingStage {
 }
 
 const DIGITAL_STAGES: ProcessingStage[] = [
-    { label: 'Upload', sublabel: 'Sending file...', progress: 10 },
-    { label: 'Extract Text & Anonymize', sublabel: 'Removing PII data', progress: 30 },
-    { label: 'Build Risk Index', sublabel: 'Mapping legal nodes', progress: 55 },
-    { label: 'Final Analysis', sublabel: 'AI-generated report', progress: 80 },
+    { label: 'Upload & Extract', sublabel: 'Parsing document...', progress: 15 },
+    { label: 'Anonymize PII', sublabel: 'Removing personal data', progress: 40 },
+    { label: 'AI Analysis', sublabel: 'Generating report...', progress: 75 },
 ];
 
 const SCANNED_STAGES: ProcessingStage[] = [
     { label: 'Upload', sublabel: 'Sending file...', progress: 5 },
     { label: 'Running OCR', sublabel: 'Extracting text from images', progress: 20 },
-    { label: 'Extract Text & Anonymize', sublabel: 'Removing PII data', progress: 45 },
-    { label: 'Build Risk Index', sublabel: 'Mapping legal nodes', progress: 60 },
-    { label: 'Final Analysis', sublabel: 'AI-generated report', progress: 80 },
+    { label: 'Anonymize PII', sublabel: 'Removing personal data', progress: 50 },
+    { label: 'AI Analysis', sublabel: 'Generating report...', progress: 75 },
 ];
 
 async function pollStatus(sessionId: string): Promise<{ status: string; has_text: boolean; has_bm25: boolean }> {
@@ -116,47 +104,39 @@ const UploadView: React.FC = () => {
             });
             setFileUrl(URL.createObjectURL(file));
 
-            // Poll for OCR (scanned) or wait for HTOC (digital)
+            // Poll for text extraction + PII (scanned OCR or large digital docs)
             if (sessionData.htoc_status === 'processing') {
                 const start = Date.now();
-                const ocrTimeout = 600000; // 10 min — EasyOCR on CPU is ~30-60s/page
-                let ocrDone = false;
-                while (Date.now() - start < ocrTimeout && !ocrDone) {
+                const processingTimeout = 2400000; // 40 min — large docs: PII can take 10-30min
+                let textDone = false;
+                while (Date.now() - start < processingTimeout && !textDone) {
                     try {
                         const status = await pollStatus(sessionData.session_id);
-                        if (status.has_text) { ocrDone = true; advanceStage(2); }
-                        else if (status.status === 'failed') throw new Error('Document processing failed.');
-                        else if (status.status === 'building') advanceStage(2);
+                        if (status.has_text || status.status === 'building' || status.status === 'ready') {
+                            textDone = true;
+                        } else if (status.status === 'failed') {
+                            throw new Error('Document processing failed.');
+                        }
                     } catch (err: any) { if (err.message?.includes('failed')) throw err; }
-                    if (!ocrDone) await new Promise(r => setTimeout(r, 3000));
+                    if (!textDone) await new Promise(r => setTimeout(r, 3000));
                 }
-                if (!ocrDone) throw new Error('Document processing timed out');
-            } else {
-                advanceStage(1);
-                await new Promise(r => setTimeout(r, 300));
+                if (!textDone) throw new Error('Document processing timed out');
             }
 
-            // Wait for HTOC + BM25 index
-            advanceStage(docType === 'scanned' ? 3 : 2);
-            const indexStart = Date.now();
-            const indexTimeout = 300000; // 5 min — HTOC build uses Gemini API
-            let indexReady = false;
-            while (Date.now() - indexStart < indexTimeout && !indexReady) {
-                try {
-                    const status = await pollStatus(sessionData.session_id);
-                    if (status.status === 'ready' || status.has_bm25 || status.status === 'failed') indexReady = true;
-                } catch { /* ignore */ }
-                if (!indexReady) await new Promise(r => setTimeout(r, 2000));
-            }
-
-            // Run analysis
+            // Go straight to analysis — don't wait for HTOC
+            // HTOC + BM25 build continues in background (improves chat later)
             advanceStage(stages.length - 1);
             const analysisData = await analysisApi.analyze(sessionData.session_id);
             setAnalysis(analysisData);
             await new Promise(r => setTimeout(r, 400));
             navigate('/app');
         } catch (err: any) {
-            setError(err.response?.data?.detail || err.message || 'Upload failed');
+            const detail = err.response?.data?.detail;
+            if (Array.isArray(detail)) {
+                setError(detail.map((d: any) => d.msg).join('. '));
+            } else {
+                setError(detail || err.message || 'Upload failed');
+            }
             setStageIndex(0);
         } finally {
             setIsUploading(false);
@@ -216,7 +196,7 @@ const UploadView: React.FC = () => {
                             <button
                                 onClick={() => document.getElementById('file-upload')?.click()}
                                 disabled={isUploading}
-                                className="px-8 py-3 bg-gradient-to-b from-primary to-primary-container text-on-primary rounded-md font-bold tracking-tight shadow-sm hover:opacity-90 transition-all active:scale-95 disabled:opacity-50"
+                                className="px-8 py-3 bg-primary text-primary-foreground rounded-md font-bold tracking-tight shadow-sm hover:opacity-90 transition-all active:scale-95 disabled:opacity-50"
                             >
                                 Select Files from Device
                             </button>
@@ -290,7 +270,7 @@ const UploadView: React.FC = () => {
                                 <select
                                     value={ocrLanguage}
                                     onChange={(e) => setOcrLanguage(e.target.value)}
-                                    className="w-full bg-surface-container-lowest border-none rounded-md px-4 py-3 text-sm font-medium focus:ring-1 focus:ring-primary-container appearance-none"
+                                    className="w-full bg-background text-foreground border border-border rounded-md px-4 py-3 text-sm font-medium focus:ring-1 focus:ring-ring appearance-none [&>option]:bg-background [&>option]:text-foreground"
                                 >
                                     {OCR_LANGUAGES.map((lang) => (
                                         <option key={lang.code} value={lang.code}>{lang.label}</option>

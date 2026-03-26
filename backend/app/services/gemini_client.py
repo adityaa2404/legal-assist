@@ -7,9 +7,11 @@ import json
 import logging
 import re
 
-# Separate clients: analysis/HTOC/OCR vs chat — each gets its own RPM quota
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
-chat_client = genai.Client(api_key=settings.GEMINI_CHAT_API_KEY) if settings.GEMINI_CHAT_API_KEY else client
+# Separate clients per task — each API key gets its own RPM/RPD quota
+# 3 keys = 3x the rate limit headroom, no task starves another
+analysis_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+htoc_client = genai.Client(api_key=settings.GEMINI_HTOC_API_KEY) if settings.GEMINI_HTOC_API_KEY else analysis_client
+chat_client = genai.Client(api_key=settings.GEMINI_CHAT_API_KEY) if settings.GEMINI_CHAT_API_KEY else analysis_client
 
 MODEL = "gemini-2.5-flash"
 
@@ -44,11 +46,15 @@ async def _retry_on_rate_limit(coro_fn, max_retries=MAX_RETRIES):
 
 class GeminiClient:
     def __init__(self):
-        self.client = client           # analysis, HTOC, OCR
-        self.chat_client = chat_client  # chat uses separate key (if configured)
+        self.client = analysis_client   # analysis (primary key)
+        self.htoc_client = htoc_client  # HTOC + tree search (separate key)
+        self.chat_client = chat_client  # chat (separate key)
 
     async def analyze_document(self, anonymized_text: str, analysis_type: str) -> Dict[str, Any]:
         prompt = self._get_analysis_prompt(analysis_type, anonymized_text)
+
+        # Analysis needs more time than chat — large docs produce massive JSON output
+        analysis_timeout = settings.GEMINI_TIMEOUT * 2
 
         try:
             response = await asyncio.wait_for(self.client.aio.models.generate_content(
@@ -64,7 +70,7 @@ class GeminiClient:
                         types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
                     ],
                 ),
-            ), timeout=settings.GEMINI_TIMEOUT)
+            ), timeout=analysis_timeout)
 
             if not response.text:
                 finish_reason = response.candidates[0].finish_reason if response.candidates else "unknown"
@@ -91,7 +97,7 @@ class GeminiClient:
                             types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
                         ],
                     ),
-                ), timeout=settings.GEMINI_TIMEOUT)
+                ), timeout=analysis_timeout)
                 if response2.text:
                     clean_text2 = self._clean_json_response(response2.text)
                     return json.loads(clean_text2, strict=False)
@@ -234,7 +240,7 @@ class GeminiClient:
         return '\n'.join(repaired)
 
     async def chat(self, anonymized_question: str, anonymized_context: str, chat_history: List[Dict[str, str]]) -> str:
-        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
+        system_context = f"""You are **Legal Assist**, an AI legal document assistant built for Indian users.
 
 YOUR ROLE:
 You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.
@@ -279,9 +285,10 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
 
     async def generate_json(self, prompt: str) -> Dict[str, Any]:
         """Generic JSON generation method used by HTOC builder and tree search.
+        Uses htoc_client (separate API key) to avoid starving analysis/chat.
         Includes automatic retry on 429 rate limit errors."""
         async def _call():
-            response = await self.client.aio.models.generate_content(
+            response = await self.htoc_client.aio.models.generate_content(
                 model=MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -328,7 +335,7 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
 
     async def chat_with_context(self, question: str, context: str, chat_history: List[Dict[str, str]], source_info: str = "") -> str:
         """Chat using targeted context from tree search (vectorless RAG)."""
-        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
+        system_context = f"""You are **Legal Assist**, an AI legal document assistant built for Indian users.
 
 YOUR ROLE:
 You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.
@@ -549,7 +556,7 @@ Document:
 
     async def chat_with_context_stream(self, question: str, context: str, chat_history: List[Dict[str, str]], source_info: str = ""):
         """Streaming version of chat_with_context. Yields text chunks as they arrive."""
-        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
+        system_context = f"""You are **Legal Assist**, an AI legal document assistant built for Indian users.
 
 YOUR ROLE:
 You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.
@@ -599,7 +606,7 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
 
     async def chat_stream(self, anonymized_question: str, anonymized_context: str, chat_history: List[Dict[str, str]]):
         """Streaming version of chat (full-text fallback). Yields text chunks."""
-        system_context = f"""You are **LawBuddy**, an AI legal document assistant built for Indian users.
+        system_context = f"""You are **Legal Assist**, an AI legal document assistant built for Indian users.
 
 YOUR ROLE:
 You help everyday people — tenants, employees, small business owners, freelancers — understand legal documents they've uploaded. You are NOT a lawyer and must never give legal advice. You explain what the document says, flag what matters, and tell users when they should consult a lawyer.

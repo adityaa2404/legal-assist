@@ -108,8 +108,15 @@ class PIIAnonymizer:
 
         return self._anonymize_with_presidio(text)
 
+    # spaCy's default max is 1M chars — chunk large texts to stay under
+    SPACY_MAX_CHARS = 900_000
+
     def _anonymize_with_presidio(self, text: str) -> Tuple[str, Dict[str, str]]:
-        """Use Presidio for PII detection — all processing is local."""
+        """Use Presidio for PII detection — all processing is local.
+        Chunks text if it exceeds spaCy's max_length to avoid ValueError."""
+        if len(text) > self.SPACY_MAX_CHARS:
+            return self._anonymize_chunked(text)
+
         results = _analyzer.analyze(
             text=text,
             language="en",
@@ -153,6 +160,87 @@ class PIIAnonymizer:
 
         logger.debug("Anonymized %d unique PII entities via Presidio", len(mapping))
         return anonymized_text, mapping
+
+    def _anonymize_chunked(self, text: str) -> Tuple[str, Dict[str, str]]:
+        """Split text into chunks under spaCy's limit, analyze in parallel, merge.
+        Splits on PAGE_BOUNDARY markers to avoid cutting mid-sentence."""
+        from concurrent.futures import ThreadPoolExecutor
+        import os
+
+        PAGE_SEP = "\n\n<<<<<PAGE_BOUNDARY>>>>>\n\n"
+        if PAGE_SEP in text:
+            pages = text.split(PAGE_SEP)
+        else:
+            pages = text.split("\n\n")
+
+        # Group pages into chunks under the limit
+        chunks = []
+        current_chunk = []
+        current_len = 0
+        joiner = PAGE_SEP if PAGE_SEP in text else "\n\n"
+
+        for page in pages:
+            if current_len + len(page) > self.SPACY_MAX_CHARS and current_chunk:
+                chunks.append(joiner.join(current_chunk))
+                current_chunk = []
+                current_len = 0
+            current_chunk.append(page)
+            current_len += len(page) + len(joiner)
+        if current_chunk:
+            chunks.append(joiner.join(current_chunk))
+
+        logger.info("PII: %d chars → %d chunks, analyzing in parallel", len(text), len(chunks))
+
+        # Step 1: Run Presidio analysis on all chunks in parallel (the slow part)
+        def _analyze_chunk(chunk):
+            results = _analyzer.analyze(text=chunk, language="en", score_threshold=0.4)
+            results = self._resolve_overlaps(results)
+            # Extract raw entities from chunk
+            entities = []
+            for r in sorted(results, key=lambda r: r.end - r.start, reverse=True):
+                orig = chunk[r.start:r.end].strip()
+                if len(orig) >= 2:
+                    entities.append((orig, r.entity_type))
+            return entities
+
+        max_workers = min(len(chunks), max(2, os.cpu_count() or 2))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            chunk_entities = list(executor.map(_analyze_chunk, chunks))
+
+        # Step 2: Build unified mapping (sequential — fast)
+        all_mapping = {}
+        reverse_map = {}  # orig_text → token (for dedup across chunks)
+        counters = {}
+
+        for entities in chunk_entities:
+            for orig, etype in entities:
+                if orig not in reverse_map:
+                    counters[etype] = counters.get(etype, 0) + 1
+                    token = f"[{etype}_{counters[etype]}]"
+                    reverse_map[orig] = token
+                    all_mapping[token] = orig
+
+        # Step 3: Apply replacements to each chunk (parallelizable)
+        def _replace_chunk(chunk_idx):
+            chunk = chunks[chunk_idx]
+            entities = chunk_entities[chunk_idx]
+            seen = {}
+            for orig, _ in entities:
+                if orig not in seen:
+                    seen[orig] = reverse_map[orig]
+            anonymized = chunk
+            for orig, token in seen.items():
+                escaped = re.escape(orig)
+                pattern = f"\\b{escaped}\\b" if orig.isalnum() else escaped
+                anonymized = re.sub(pattern, token, anonymized)
+            return anonymized
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            anonymized_chunks = list(executor.map(_replace_chunk, range(len(chunks))))
+
+        anonymized_text = joiner.join(anonymized_chunks)
+        logger.info("PII done: %d entities across %d chunks", len(all_mapping), len(chunks))
+        return anonymized_text, all_mapping
 
     def _resolve_overlaps(self, results) -> list:
         """Remove overlapping detections, keeping the highest confidence one."""

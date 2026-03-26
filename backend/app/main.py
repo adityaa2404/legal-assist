@@ -17,7 +17,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 # Silence noisy third-party loggers
-for noisy in ("httpx", "httpcore", "google", "urllib3", "motor", "pymongo", "presidio"):
+for noisy in ("httpx", "httpcore", "google", "urllib3", "motor", "pymongo", "presidio", "fontTools", "weasyprint"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 limiter = Limiter(key_func=get_remote_address)

@@ -49,6 +49,16 @@ class HistoryService:
 
         return await cursor.to_list(length=limit)
 
+    async def delete_history_item(self, user_email: str, created_at: str) -> bool:
+        """Delete a single history item."""
+        from datetime import datetime as dt
+        try:
+            ts = dt.fromisoformat(created_at)
+        except ValueError:
+            return False
+        result = await self.collection.delete_one({"user_email": user_email, "created_at": ts})
+        return result.deleted_count > 0
+
     async def get_full_history_item(self, user_email: str, created_at: str) -> Optional[dict]:
         """Get a single history item with all data (including chat data)."""
         from datetime import datetime as dt

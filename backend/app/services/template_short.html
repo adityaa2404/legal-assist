@@ -388,7 +388,14 @@
 {% endfor %}
 {% endif %}
 
-<div class="foot">Generated {{ current_ist_time | default('') }} &mdash; legal-assist AI &middot; Confidential</div>
+<div class="foot" style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #e2e8f0;">
+    <p style="font-size: 8px; color: #94a3b8; line-height: 1.6; margin-bottom: 6px;">
+        DISCLAIMER: AI-generated analysis for informational purposes only. Not legal advice. Consult a qualified legal professional before acting on any results.
+    </p>
+    <p style="font-size: 7px; color: #94a3b8;">
+        Generated {{ current_ist_time | default('') }} &mdash; legal-assist AI &middot; Confidential
+    </p>
+</div>
 
 </body>
 </html>

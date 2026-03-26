@@ -99,7 +99,7 @@ const LandingPage: React.FC = () => {
                 <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
                     {[
                         { value: '22+', label: 'OCR Languages' },
-                        { value: '<30s', label: 'Avg. Analysis Time' },
+                        { value: '<150s', label: 'Avg. Analysis Time*' },
                         { value: '0', label: 'Data Retained' },
                         { value: '100%', label: 'Local PII Processing' },
                     ].map(stat => (
@@ -108,6 +108,18 @@ const LandingPage: React.FC = () => {
                             <p className="text-on-surface-variant text-sm mt-1">{stat.label}</p>
                         </div>
                     ))}
+                </div>
+                <p className="text-center text-xs text-muted-foreground mt-4">* Digital documents only</p>
+            </section>
+
+            {/* Disclaimer */}
+            <section className="px-6 py-6 bg-surface">
+                <div className="max-w-3xl mx-auto text-center">
+                    <p className="text-[10px] text-muted-foreground/70 font-mono leading-relaxed">
+                        Legal Assist is an AI-powered tool for informational purposes only. It does not provide legal advice.
+                        Always consult a qualified legal professional before making decisions based on any analysis.
+                        All documents are processed in-memory and automatically deleted after your session expires.
+                    </p>
                 </div>
             </section>
 

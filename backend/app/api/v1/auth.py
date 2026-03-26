@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.models.user import UserCreate, UserLogin, UserResponse, TokenResponse
 from app.services.auth_service import AuthService
-from app.core.dependencies import get_auth_service
+from app.core.dependencies import get_auth_service, get_current_user
 
 router = APIRouter()
 
@@ -44,3 +44,25 @@ async def login(
             created_at=user.created_at,
         ),
     )
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_profile(
+    email: str = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    user = await auth_service.get_user_by_email(email)
+    if not user:
+        raise HTTPException(404, "User not found")
+    return UserResponse(email=user.email, full_name=user.full_name, created_at=user.created_at)
+
+
+@router.delete("/me", status_code=200)
+async def delete_account(
+    email: str = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    deleted = await auth_service.delete_account(email)
+    if not deleted:
+        raise HTTPException(404, "Account not found")
+    return {"message": "Account and all associated data deleted"}

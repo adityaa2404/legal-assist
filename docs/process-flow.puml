@@ -1,0 +1,276 @@
+@startuml Legal Assist — Process Flow
+
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam ActivityBackgroundColor #FFFFFF
+skinparam ActivityBorderColor #64748B
+skinparam ActivityDiamondBackgroundColor #FEF3C7
+skinparam ActivityDiamondBorderColor #D97706
+skinparam ArrowColor #475569
+skinparam NoteBackgroundColor #EFF6FF
+skinparam NoteBorderColor #93C5FD
+skinparam PartitionBackgroundColor #F8FAFC
+skinparam PartitionBorderColor #CBD5E1
+
+title **Legal Assist** — Process Flow\n
+
+|#EFF6FF| **Frontend (React)** |
+|#DBEAFE| **API (FastAPI)** |
+|#DCFCE7| **Services** |
+|#FEE2E2| **External** |
+
+' ═══════════════════════════════════
+' FLOW 1: AUTHENTICATION
+' ═══════════════════════════════════
+
+|**Frontend (React)**|
+start
+:User opens app;
+:Register / Login;
+
+|**API (FastAPI)**|
+:POST /auth/register or /login;
+
+|**Services**|
+:AuthService validates credentials
+bcrypt hash / verify password;
+
+|**External**|
+:MongoDB **users** collection
+store or lookup user;
+
+|**Services**|
+:Generate **JWT token** (2h expiry);
+
+|**Frontend (React)**|
+:Store token in localStorage
+Redirect to Upload page;
+
+' ═══════════════════════════════════
+' FLOW 2: DOCUMENT UPLOAD
+' ═══════════════════════════════════
+
+|**Frontend (React)**|
+:User selects PDF/DOCX (up to 50MB)
+Chooses: Digital or Scanned + Language;
+
+|**API (FastAPI)**|
+:POST /upload
+Validate file type & size;
+
+if (Document type?) then (Digital)
+
+  |**Services**|
+  :****PyMuPDF**** extracts text
+  page by page (fast, no API);
+
+  if (Text > 500K chars?) then (Yes — Large doc)
+    :Create session with
+    **htoc_status = "processing"**
+    Return response immediately;
+
+    note right
+      Large docs: PII runs
+      in background to avoid
+      upload timeout
+    end note
+
+    |**API (FastAPI)**|
+    :Launch **background task**
+    (same as scanned path below);
+
+    |**Frontend (React)**|
+    :Poll /htoc-status every 3s
+    Show pipeline progress;
+
+  else (No — Small doc)
+    |**Services**|
+    :****Presidio + spaCy**** PII detection
+    12 Indian recognizers (Aadhaar, PAN, etc.)
+    Replace real names → [PERSON_1], [ORG_1];
+
+    :Create session with text + PII mapping
+    **htoc_status = "building"**;
+
+    |**Frontend (React)**|
+    :Upload returns instantly
+    Poll for HTOC readiness;
+  endif
+
+else (Scanned)
+
+  |**API (FastAPI)**|
+  :Quick page count via PyMuPDF
+  Create session immediately
+  **htoc_status = "processing"**
+  Return response;
+
+  |**Frontend (React)**|
+  :Poll /htoc-status every 3s
+  Show pipeline progress;
+
+  |**Services**|
+  note right
+    All steps run in
+    **background task**
+  end note
+
+  :****EasyOCR**** (local, CPU)
+  Per-page parallel processing
+  Skip blank pages (variance check)
+  English: skip pages with digital text
+  Non-English: OCR every page;
+
+  :****Presidio**** PII Anonymization
+  Chunked + parallel for large docs;
+
+endif
+
+' ═══════════════════════════════════
+' HTOC + BM25 BUILD (shared path)
+' ═══════════════════════════════════
+
+|**Services**|
+:====
+**HTOC Build** (background);
+
+if (Pages ≤ 3?) then (Yes)
+  :Simple tree — no LLM call
+  (title + page range only);
+else (No)
+  |**External**|
+  :****Gemini 2.5 Flash****
+  Analyze page previews
+  Generate hierarchical TOC
+  with summaries per section;
+endif
+
+|**Services**|
+:**BM25 Index** build
+Tokenize pages + HTOC metadata
+Okapi BM25 scoring ready;
+
+|**External**|
+:Save to MongoDB **sessions**
+htoc_tree + bm25_data
+**htoc_status = "ready"**;
+
+|**Frontend (React)**|
+:Poll detects **ready**
+Advance to Analysis stage;
+
+' ═══════════════════════════════════
+' FLOW 3: ANALYSIS
+' ═══════════════════════════════════
+
+|**Frontend (React)**|
+:Auto-trigger POST /analyze;
+
+|**API (FastAPI)**|
+:Load session from MongoDB;
+
+|**Services**|
+:**TreeSearch** builds structured context
+Walk HTOC → extract key sections
+Cap at 25K chars (sentence boundary);
+
+|**External**|
+:****Gemini 2.5 Flash**** (JSON mode)
+Analyze document with risk formula
+Return: summary, parties, clauses,
+risks, obligations, risk score (0-100);
+
+|**Services**|
+:**De-anonymize** result
+[PERSON_1] → real name
+using PII mapping;
+
+:**Auto-save** to HistoryService
+(MongoDB analysis_history);
+
+|**Frontend (React)**|
+:Display **Analysis Dashboard**
+Risk score ring, clauses, risks
+parties, obligations, missing clauses;
+
+' ═══════════════════════════════════
+' FLOW 4: CHAT (Vectorless RAG)
+' ═══════════════════════════════════
+
+|**Frontend (React)**|
+:User asks a question
+e.g. "What is the notice period?";
+
+|**API (FastAPI)**|
+:POST /chat/stream
+Anonymize question via PII mapping;
+
+|**Services**|
+:**Step 1 — BM25 Keyword Search**
+Tokenize query → score pages
+Return top-5 pages + confidence;
+
+if (BM25 confidence?) then (High)
+  :Use BM25 context directly;
+else (Low)
+  :**Step 2 — LLM Tree Search**
+  Send query + HTOC summaries
+  to Gemini;
+
+  |**External**|
+  :Gemini reasons over HTOC
+  Selects 2-5 most relevant sections
+  Returns node IDs + reasoning;
+
+  |**Services**|
+  :Extract page text for
+  selected HTOC nodes;
+endif
+
+|**Services**|
+:Merge context from search
+(pages with section headers);
+
+|**External**|
+:****Gemini 2.5 Flash**** (streaming)
+Answer grounded in document context
+Cite clauses, pages, sections;
+
+|**Services**|
+:**De-anonymize** response
+[PERSON_1] → real name;
+
+|**Frontend (React)**|
+:Stream response token-by-token
+Show source sections sidebar
+User can ask follow-ups ↩;
+
+' ═══════════════════════════════════
+' FLOW 5: PDF REPORT
+' ═══════════════════════════════════
+
+|**Frontend (React)**|
+:User clicks "Download Report";
+
+|**API (FastAPI)**|
+:GET /analyze/report;
+
+|**Services**|
+:**ReportGenerator**
+Jinja2 template + WeasyPrint
+Render analysis as styled PDF;
+
+|**Frontend (React)**|
+:Download PDF file;
+
+stop
+
+legend bottom
+  **Privacy:** All PII processing is local (Presidio + spaCy). No personal data sent to Gemini.
+  **Zero Retention:** Sessions auto-expire after 2 hours (MongoDB TTL index).
+  **Vectorless RAG:** No embeddings or vector DB — uses HTOC tree + BM25 keywords.
+endlegend
+
+@enduml

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from pydantic import BaseModel, EmailStr
 from app.services.session_service import SessionService
 from app.services.pii_anonymizer import PIIAnonymizer
 from app.services.gemini_client import GeminiClient
@@ -11,6 +12,7 @@ import logging
 from app.models.analysis import AnalysisResponse
 from app.services.report_generator import create_pdf_from_analysis
 from app.services.history_service import HistoryService
+from app.services.email_service import send_report_email, is_email_configured
 
 logger = logging.getLogger(__name__)
 
@@ -223,3 +225,50 @@ async def get_analysis_report(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=report_{session_id}.pdf"}
     )
+
+
+class EmailReportRequest(BaseModel):
+    email: EmailStr
+    report_type: str = "full"
+
+
+@router.post("/analyze/email")
+async def email_analysis_report(
+    body: EmailReportRequest,
+    session_id: str = Header(..., alias="X-Session-ID"),
+    current_user: str = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+    pii_service: PIIAnonymizer = Depends(get_pii_service),
+    gemini: GeminiClient = Depends(get_gemini_client),
+    tree_search: TreeSearchService = Depends(get_tree_search),
+):
+    if not is_email_configured():
+        raise HTTPException(501, "Email is not configured on this server")
+
+    result = await _get_or_run_analysis(
+        session_id, body.report_type, session_service, pii_service, gemini, tree_search
+    )
+
+    session = await session_service.get(session_id)
+    filename = session.document_metadata.get("filename", "document") if session else "document"
+
+    try:
+        pdf_bytes = create_pdf_from_analysis(result, filename, body.report_type)
+    except Exception as e:
+        raise HTTPException(500, f"PDF generation failed: {str(e)}")
+
+    try:
+        send_report_email(
+            to_email=body.email,
+            pdf_bytes=pdf_bytes,
+            filename=filename,
+            report_type=body.report_type,
+            risk_score=result.get("overall_risk_score"),
+        )
+    except RuntimeError as e:
+        raise HTTPException(501, str(e))
+    except Exception as e:
+        logger.error("Email send failed: %s", e)
+        raise HTTPException(500, f"Failed to send email: {str(e)}")
+
+    return {"message": f"Report sent to {body.email}"}

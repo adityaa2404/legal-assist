@@ -7,11 +7,14 @@ import AuthPage from './components/AuthPage';
 import RiskPage from './components/RiskPage';
 import ClausesPage from './components/ClausesPage';
 import ChatPage from './components/ChatPage';
+import ClauseLibraryPage from './components/ClauseLibraryPage';
+import ComparisonPage from './components/ComparisonPage';
 import HistoryPage from './components/HistoryPage';
 import { useSession } from './hooks/useSession';
 import { useAuth } from './contexts/AuthContext';
 import { useTheme } from './contexts/ThemeContext';
 import Icon from './components/ui/icon';
+import { Logo, LogoIcon } from './components/ui/Logo';
 
 /* ── Route Guards ── */
 
@@ -32,15 +35,19 @@ const DashboardRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 /* ── Top Bar ── */
 
 const TopBar: React.FC<{ minimal?: boolean }> = ({ minimal }) => {
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, user } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
+
+  const initials = user?.full_name
+    ? user.full_name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+    : '?';
 
   return (
     <header className="bg-surface sticky top-0 z-50 w-full border-b border-border">
       <div className="flex justify-between items-center w-full px-6 lg:px-8 py-3 max-w-[1920px] mx-auto">
-        <Link to="/" className="text-lg font-bold tracking-widest text-foreground uppercase font-headline">
-          Legal Assist
+        <Link to="/" className="hover:opacity-80 transition-opacity">
+          <Logo size="sm" />
         </Link>
 
         {!minimal && (
@@ -48,6 +55,7 @@ const TopBar: React.FC<{ minimal?: boolean }> = ({ minimal }) => {
             {[
               { label: 'Analysis', path: '/app' },
               { label: 'Upload', path: '/upload' },
+              { label: 'Compare', path: '/app/compare' },
               { label: 'Profile', path: '/profile' },
             ].map(link => (
               <Link
@@ -76,9 +84,18 @@ const TopBar: React.FC<{ minimal?: boolean }> = ({ minimal }) => {
           </button>
 
           {isAuthenticated ? (
-            <button onClick={logout} className="p-2 hover:bg-muted rounded-md transition-all" title="Sign out">
-              <Icon name="logout" />
-            </button>
+            <>
+              <button onClick={logout} className="p-2 hover:bg-muted rounded-md transition-all" title="Sign out">
+                <Icon name="logout" />
+              </button>
+              <Link
+                to="/profile"
+                className="w-9 h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold tracking-tight hover:opacity-90 transition-opacity ml-1"
+                title={user?.full_name || 'Profile'}
+              >
+                {initials}
+              </Link>
+            </>
           ) : (
             <Link to="/auth" className="p-2 hover:bg-muted rounded-md transition-all">
               <Icon name="account_circle" />
@@ -108,6 +125,7 @@ const SideNav: React.FC = () => {
     { icon: 'gavel', label: 'Risk Report', path: '/app/risks' },
     { icon: 'article', label: 'Clauses', path: '/app/clauses' },
     { icon: 'forum', label: 'Chat', path: '/app/chat' },
+    { icon: 'bookmark', label: 'Clause Library', path: '/app/library' },
     { icon: 'person', label: 'Profile', path: '/profile' },
   ];
 
@@ -119,15 +137,19 @@ const SideNav: React.FC = () => {
   return (
     <aside className="h-screen w-64 fixed left-0 top-0 bg-surface-low flex flex-col p-4 space-y-2 z-40 hidden lg:flex border-r border-border">
       {/* Brand */}
-      <div className="mb-6 px-2 flex items-center space-x-3">
-        <Icon name="gavel" size="lg" className="text-primary" />
-        <div className="flex flex-col">
-          <span className="font-headline font-black text-foreground text-lg tracking-tight leading-none">Legal Assist</span>
-          <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
-            {user?.full_name || 'Verified Session'}
-          </span>
+      <Link to="/" className="mb-6 px-2 hover:opacity-80 transition-opacity">
+        <div className="flex items-center space-x-3">
+          <LogoIcon size={32} />
+          <div className="flex flex-col">
+            <span className="font-headline font-black text-lg tracking-tight leading-none">
+              <span style={{ color: '#0B1F3A' }} className="dark:text-blue-200">Legal</span><span className="text-foreground">Assist</span>
+            </span>
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
+              {user?.full_name || 'Verified Session'}
+            </span>
+          </div>
         </div>
-      </div>
+      </Link>
 
       {/* New Analysis */}
       <button
@@ -174,26 +196,66 @@ const SideNav: React.FC = () => {
 
 const Footer: React.FC = () => (
   <footer className="w-full py-6 mt-auto border-t border-border bg-surface text-muted-foreground">
-    <div className="flex flex-col md:flex-row justify-between items-center px-6 lg:px-12 max-w-[1920px] mx-auto gap-4">
-      <div className="flex items-center space-x-4">
-        <span className="font-bold text-outline font-headline text-sm">Legal Assist</span>
-        <span className="font-mono text-[10px] tracking-tighter">&copy; 2025 Legal Assist. Zero Retention Guaranteed.</span>
+    <div className="flex flex-col items-center px-6 lg:px-12 max-w-[1920px] mx-auto gap-3">
+      <div className="flex flex-col md:flex-row justify-between items-center w-full gap-4">
+        <div className="flex items-center space-x-4">
+          <Logo size="sm" />
+          <span className="font-mono text-[10px] tracking-tighter">&copy; 2025 LegalAssist. Zero Retention Guaranteed.</span>
+        </div>
+        <span className="font-mono text-[10px] tracking-tighter">AI-powered legal document analysis</span>
       </div>
-      <span className="font-mono text-[10px] tracking-tighter">AI-powered legal document analysis</span>
+      <p className="text-[9px] text-muted-foreground/70 text-center font-mono max-w-2xl leading-relaxed">
+        Not legal advice. All analysis is AI-generated and for informational purposes only. Consult a qualified legal professional before acting on any results.
+      </p>
     </div>
   </footer>
 );
 
 /* ── Dashboard Layout wrapper ── */
 
-const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+/* ── Mobile Bottom Nav (dashboard pages, <lg only) ── */
+
+const MobileBottomNav: React.FC = () => {
+  const location = useLocation();
+  const items = [
+    { icon: 'description', label: 'Overview', path: '/app' },
+    { icon: 'gavel', label: 'Risks', path: '/app/risks' },
+    { icon: 'article', label: 'Clauses', path: '/app/clauses' },
+    { icon: 'forum', label: 'Chat', path: '/app/chat' },
+  ];
+
+  const isActive = (path: string) => {
+    if (path === '/app') return location.pathname === '/app';
+    return location.pathname.startsWith(path);
+  };
+
+  return (
+    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface border-t border-border flex items-center justify-around py-2 px-1 safe-area-bottom">
+      {items.map(item => (
+        <Link
+          key={item.path}
+          to={item.path}
+          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg transition-colors ${
+            isActive(item.path) ? 'text-primary' : 'text-muted-foreground'
+          }`}
+        >
+          <Icon name={item.icon} size="sm" />
+          <span className="text-[10px] font-bold">{item.label}</span>
+        </Link>
+      ))}
+    </nav>
+  );
+};
+
+const DashboardLayout: React.FC<{ children: React.ReactNode; hideFooter?: boolean }> = ({ children, hideFooter }) => (
   <>
     <SideNav />
-    <div className="lg:ml-64 min-h-screen flex flex-col">
+    <div className="lg:ml-64 h-screen flex flex-col overflow-hidden">
       <TopBar />
-      <main className="flex-1">{children}</main>
-      <Footer />
+      <main className="flex-1 min-h-0 overflow-auto pb-16 lg:pb-0">{children}</main>
+      {!hideFooter && <div className="hidden lg:block shrink-0"><Footer /></div>}
     </div>
+    <MobileBottomNav />
   </>
 );
 
@@ -262,8 +324,22 @@ const App: React.FC = () => {
           } />
           <Route path="/app/chat" element={
             <DashboardRoute>
-              <DashboardLayout><ChatPage /></DashboardLayout>
+              <DashboardLayout hideFooter><ChatPage /></DashboardLayout>
             </DashboardRoute>
+          } />
+          <Route path="/app/library" element={
+            <AuthRoute>
+              <TopBar />
+              <main className="flex-1"><ClauseLibraryPage /></main>
+              <Footer />
+            </AuthRoute>
+          } />
+          <Route path="/app/compare" element={
+            <AuthRoute>
+              <TopBar />
+              <main className="flex-1"><ComparisonPage /></main>
+              <Footer />
+            </AuthRoute>
           } />
 
           <Route path="*" element={<Navigate to="/" replace />} />

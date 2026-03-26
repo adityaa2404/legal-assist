@@ -2,6 +2,9 @@ import React from 'react';
 import { useSession } from '@/hooks/useSession';
 import { Link } from 'react-router-dom';
 import Icon from './ui/icon';
+import { Skeleton } from './ui/skeleton';
+import DisclaimerBanner from './DisclaimerBanner';
+import BackButton from './BackButton';
 import {
     DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
     DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel,
@@ -11,6 +14,9 @@ import axiosClient from '@/api/axiosClient';
 const AnalysisDashboard: React.FC = () => {
     const { analysis, session } = useSession();
     const [downloading, setDownloading] = React.useState(false);
+    const [emailModalOpen, setEmailModalOpen] = React.useState(false);
+    const [emailAddress, setEmailAddress] = React.useState('');
+    const [emailStatus, setEmailStatus] = React.useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
 
     const handleDownloadReport = async (reportType: 'full' | 'short') => {
         if (!session) return;
@@ -33,11 +39,78 @@ const AnalysisDashboard: React.FC = () => {
         }
     };
 
+    const handleEmailReport = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!session || !emailAddress.trim()) return;
+        setEmailStatus('sending');
+        try {
+            await axiosClient.post('/analyze/email', {
+                email: emailAddress,
+                report_type: 'full',
+            }, {
+                headers: { 'X-Session-ID': session.session_id },
+            });
+            setEmailStatus('sent');
+            setTimeout(() => { setEmailModalOpen(false); setEmailStatus('idle'); setEmailAddress(''); }, 2000);
+        } catch {
+            setEmailStatus('error');
+        }
+    };
+
     if (!analysis || !session) {
         return (
-            <div className="flex flex-col items-center justify-center h-[60vh] text-muted-foreground space-y-3 animate-pulse-subtle">
-                <Icon name="description" size="xl" className="opacity-30" />
-                <p className="text-base font-medium">Loading analysis...</p>
+            <div className="p-6 lg:p-10 space-y-8 max-w-6xl mx-auto animate-fade-in">
+                {/* Doc info bar skeleton */}
+                <div className="flex items-center justify-between bg-surface-low px-6 py-4 rounded-xl">
+                    <div className="flex items-center space-x-4">
+                        <Skeleton className="w-10 h-10 rounded-lg" />
+                        <div className="space-y-2">
+                            <Skeleton className="h-5 w-48" />
+                            <Skeleton className="h-3 w-28" />
+                        </div>
+                    </div>
+                    <Skeleton className="h-9 w-36 rounded-md" />
+                </div>
+
+                {/* Hero skeleton: score ring + summary */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                    <div className="md:col-span-4 bg-card p-8 rounded-xl flex flex-col items-center justify-center border border-border">
+                        <Skeleton className="w-40 h-40 rounded-full" />
+                        <Skeleton className="h-3 w-32 mt-4" />
+                    </div>
+                    <div className="md:col-span-8 bg-card p-8 rounded-xl border border-border space-y-4">
+                        <Skeleton className="h-4 w-40" />
+                        <Skeleton className="h-3 w-full" />
+                        <Skeleton className="h-3 w-full" />
+                        <Skeleton className="h-3 w-3/4" />
+                        <Skeleton className="h-3 w-full" />
+                        <Skeleton className="h-3 w-5/6" />
+                    </div>
+                </div>
+
+                {/* Quick stats skeleton */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {[1, 2, 3, 4].map(i => (
+                        <div key={i} className="bg-card border border-border rounded-xl p-5 flex items-center space-x-4">
+                            <Skeleton className="w-6 h-6 rounded" />
+                            <div className="space-y-2">
+                                <Skeleton className="h-7 w-8" />
+                                <Skeleton className="h-3 w-20" />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Nav cards skeleton */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {[1, 2, 3].map(i => (
+                        <div key={i} className="bg-card border border-border rounded-xl p-6 space-y-3">
+                            <Skeleton className="w-6 h-6 rounded" />
+                            <Skeleton className="h-5 w-28" />
+                            <Skeleton className="h-3 w-full" />
+                        </div>
+                    ))}
+                </div>
             </div>
         );
     }
@@ -52,6 +125,8 @@ const AnalysisDashboard: React.FC = () => {
 
     return (
         <div className="p-6 lg:p-10 space-y-8 animate-fade-in max-w-6xl mx-auto">
+            <BackButton to="/upload" label="Back to Upload" />
+
             {/* Document Info Bar */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-surface-low px-6 py-4 rounded-xl gap-4">
                 <div className="flex items-center space-x-4">
@@ -91,9 +166,17 @@ const AnalysisDashboard: React.FC = () => {
                             <Icon name="summarize" size="sm" className="mr-2" />
                             Summary Report
                         </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => setEmailModalOpen(true)}>
+                            <Icon name="email" size="sm" className="mr-2" />
+                            Email Report
+                        </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
             </div>
+
+            {/* Disclaimer */}
+            <DisclaimerBanner />
 
             {/* Hero: Risk Score + Summary bento */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
@@ -233,6 +316,56 @@ const AnalysisDashboard: React.FC = () => {
                                 </div>
                             </div>
                         ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Email Report Modal */}
+            {emailModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fade-in" onClick={() => setEmailModalOpen(false)}>
+                    <div className="bg-card rounded-xl border border-border p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center gap-3 mb-4">
+                            <Icon name="email" className="text-primary" />
+                            <h3 className="font-bold text-lg">Email Report</h3>
+                        </div>
+                        <form onSubmit={handleEmailReport} className="space-y-4">
+                            <div>
+                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block mb-1.5">
+                                    Recipient Email
+                                </label>
+                                <input
+                                    type="email"
+                                    value={emailAddress}
+                                    onChange={e => setEmailAddress(e.target.value)}
+                                    placeholder="name@example.com"
+                                    required
+                                    className="w-full bg-muted border border-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
+                                />
+                            </div>
+                            <div className="flex items-center justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => { setEmailModalOpen(false); setEmailStatus('idle'); }}
+                                    className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={emailStatus === 'sending' || emailStatus === 'sent'}
+                                    className="bg-primary text-primary-foreground px-5 py-2 rounded-md text-sm font-bold flex items-center gap-2 hover:opacity-90 transition-all disabled:opacity-50"
+                                >
+                                    {emailStatus === 'sending' && <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>}
+                                    {emailStatus === 'idle' && 'Send Report'}
+                                    {emailStatus === 'sending' && 'Sending...'}
+                                    {emailStatus === 'sent' && 'Sent!'}
+                                    {emailStatus === 'error' && 'Failed — Retry'}
+                                </button>
+                            </div>
+                            {emailStatus === 'error' && (
+                                <p className="text-xs text-destructive">Failed to send. Check if email is configured on the server.</p>
+                            )}
+                        </form>
                     </div>
                 </div>
             )}

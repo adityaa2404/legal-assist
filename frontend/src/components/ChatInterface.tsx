@@ -1,20 +1,86 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useMemo, useCallback } from 'react';
 import { useChat } from '@/hooks/useChat';
 import { useSession } from '@/hooks/useSession';
 import Icon from './ui/icon';
 import Markdown from 'react-markdown';
+import DisclaimerBanner from './DisclaimerBanner';
+
+/** Generate context-aware suggested questions from analysis results */
+function buildSuggestions(analysis: ReturnType<typeof useSession>['analysis']): string[] {
+    if (!analysis) return ['Summarize key risks', 'Find termination period', 'Who are the parties?'];
+
+    const suggestions: string[] = [];
+
+    // Questions about specific risks
+    const highRisks = analysis.risks.filter(r => r.severity === 'high');
+    if (highRisks.length > 0) {
+        suggestions.push(`Explain the "${highRisks[0].risk_title}" risk`);
+    }
+
+    // Questions about parties
+    if (analysis.parties.length >= 2) {
+        const p = typeof analysis.parties[0] === 'string' ? analysis.parties[0] : (analysis.parties[0] as any).name;
+        suggestions.push(`What are ${p}'s obligations?`);
+    }
+
+    // Questions about missing clauses
+    if (analysis.missing_clauses.length > 0) {
+        suggestions.push(`Why is "${analysis.missing_clauses[0]}" missing?`);
+    }
+
+    // Questions about key clauses
+    const critical = analysis.key_clauses.filter(c => c.importance === 'critical');
+    if (critical.length > 0) {
+        suggestions.push(`Explain the "${critical[0].clause_title}" clause`);
+    }
+
+    // Generic but relevant
+    suggestions.push('What is the notice period?');
+    suggestions.push('Summarize all obligations');
+    suggestions.push('What are the termination conditions?');
+
+    // Return first 4 unique suggestions
+    return [...new Set(suggestions)].slice(0, 4);
+}
 
 const ChatInterface: React.FC = () => {
-    const { session } = useSession();
+    const { session, analysis } = useSession();
     const { messages, sendMessage, isLoading, isStreaming, error } = useChat(session?.session_id || null);
     const inputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const lastAssistantRef = useRef<HTMLDivElement>(null);
+    const suggestions = useMemo(() => buildSuggestions(analysis), [analysis]);
+    const prevMsgCountRef = useRef(0);
+    const userIsScrolledUp = useRef(false);
 
+    // Track whether user has scrolled away from bottom
+    const handleScroll = useCallback(() => {
+        if (!scrollRef.current) return;
+        const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+        userIsScrolledUp.current = scrollHeight - scrollTop - clientHeight > 80;
+    }, []);
+
+    // When a NEW assistant message appears, scroll its top into view
     useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        const count = messages.length;
+        const prev = prevMsgCountRef.current;
+        prevMsgCountRef.current = count;
+
+        if (count > prev && count >= 2 && messages[count - 1]?.role === 'assistant') {
+            // New assistant message just started — scroll to its top
+            userIsScrolledUp.current = false;
+            requestAnimationFrame(() => {
+                lastAssistantRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
         }
-    }, [messages]);
+    }, [messages.length]);
+
+    // During streaming, gently follow content — only if user hasn't scrolled up
+    useEffect(() => {
+        if (!isStreaming || userIsScrolledUp.current || !scrollRef.current) return;
+        const el = scrollRef.current;
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }, [isStreaming, messages]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -39,7 +105,7 @@ const ChatInterface: React.FC = () => {
     }
 
     return (
-        <div className="h-full bg-card rounded-xl border border-border flex flex-col">
+        <div className="h-full max-h-full bg-card rounded-xl border border-border flex flex-col overflow-hidden">
             {/* Header */}
             <div className="shrink-0 px-5 py-3 border-b border-border flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -57,7 +123,8 @@ const ChatInterface: React.FC = () => {
             {/* Messages — scrollable area */}
             <div
                 ref={scrollRef}
-                className="flex-1 min-h-0 overflow-y-auto p-5 space-y-5"
+                onScroll={handleScroll}
+                className="flex-1 min-h-0 overflow-y-auto p-5 space-y-5 scroll-smooth"
             >
                 {messages.length === 0 && (
                     <div className="text-center text-muted-foreground mt-16 space-y-5">
@@ -69,7 +136,7 @@ const ChatInterface: React.FC = () => {
                             <p className="text-sm text-muted-foreground">I'll find the relevant sections and explain in plain English.</p>
                         </div>
                         <div className="flex flex-wrap gap-2 justify-center pt-2">
-                            {['Summarize key risks', 'Find termination period', 'Who are the parties?'].map(q => (
+                            {suggestions.map(q => (
                                 <button
                                     key={q}
                                     onClick={() => handleSuggestion(q)}
@@ -83,19 +150,23 @@ const ChatInterface: React.FC = () => {
                 )}
 
                 {messages.map((msg, idx) => (
-                    <div key={idx} className="animate-fade-in">
+                    <div
+                        key={idx}
+                        ref={msg.role === 'assistant' && idx === messages.length - 1 ? lastAssistantRef : undefined}
+                        className="animate-fade-in"
+                    >
                         {msg.role === 'user' ? (
                             <div className="flex flex-col items-end gap-1.5">
-                                <div className="bg-primary text-primary-foreground px-5 py-3 rounded-2xl rounded-br-md max-w-[80%] shadow-sm">
-                                    <p className="text-base leading-relaxed">{msg.content}</p>
+                                <div className="bg-primary text-primary-foreground px-4 sm:px-5 py-3 rounded-2xl rounded-br-md max-w-[90%] sm:max-w-[80%] shadow-sm">
+                                    <p className="text-sm leading-relaxed">{msg.content}</p>
                                 </div>
                                 <span className="text-xs text-muted-foreground font-mono pr-1">You</span>
                             </div>
                         ) : (
-                            <div className="flex flex-col gap-1.5 max-w-[90%]">
+                            <div className="flex flex-col gap-1.5 max-w-[95%] sm:max-w-[90%]">
                                 <div className="bg-muted px-5 py-4 rounded-2xl rounded-bl-md">
                                     <Markdown
-                                        className="text-base leading-relaxed text-foreground prose prose-base max-w-none
+                                        className="text-sm leading-relaxed text-foreground prose prose-sm max-w-none
                                             [&>p]:mb-3 [&>p:last-child]:mb-0
                                             [&>ul]:pl-5 [&>ul]:mb-3 [&>ol]:pl-5 [&>ol]:mb-3
                                             [&_li]:mb-1
@@ -165,7 +236,7 @@ const ChatInterface: React.FC = () => {
             <div className="shrink-0 p-4 border-t border-border">
                 {messages.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-3">
-                        {['Explain key risks', 'Find termination period', 'List all obligations'].map(q => (
+                        {suggestions.slice(0, 3).map(q => (
                             <button
                                 key={q}
                                 onClick={() => handleSuggestion(q)}
@@ -193,6 +264,9 @@ const ChatInterface: React.FC = () => {
                         <Icon name="send" />
                     </button>
                 </form>
+                <div className="mt-2">
+                    <DisclaimerBanner compact />
+                </div>
             </div>
         </div>
     );

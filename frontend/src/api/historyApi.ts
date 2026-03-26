@@ -16,6 +16,10 @@ export const historyApi = {
         return data;
     },
 
+    deleteItem: async (created_at: string): Promise<void> => {
+        await axiosClient.delete('/history', { data: { created_at } });
+    },
+
     restoreSession: async (created_at: string): Promise<RestoreResponse> => {
         const { data } = await axiosClient.post<RestoreResponse>(
             '/history/restore',

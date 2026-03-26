@@ -35,7 +35,12 @@ const AuthPage: React.FC = () => {
             }
             navigate('/upload');
         } catch (err: any) {
-            setError(err.response?.data?.detail || err.message || 'Authentication failed');
+            const detail = err.response?.data?.detail;
+            if (Array.isArray(detail)) {
+                setError(detail.map((d: any) => d.msg).join('. ').replace(/^Value error, /g, ''));
+            } else {
+                setError(detail || err.message || 'Authentication failed');
+            }
         } finally {
             setIsLoading(false);
         }

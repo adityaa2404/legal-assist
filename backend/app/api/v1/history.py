@@ -26,6 +26,19 @@ async def get_analysis_history(
     return {"history": items, "count": len(items)}
 
 
+@router.delete("/history")
+async def delete_history_item(
+    created_at: str = Body(..., embed=True),
+    current_user: str = Depends(get_current_user),
+    history_service: HistoryService = Depends(get_history_service),
+):
+    """Delete a single analysis from history."""
+    deleted = await history_service.delete_history_item(current_user, created_at)
+    if not deleted:
+        raise HTTPException(404, "History item not found")
+    return {"message": "Analysis deleted"}
+
+
 @router.post("/history/restore")
 async def restore_session_from_history(
     created_at: str = Body(..., embed=True),

@@ -39,7 +39,14 @@ _LANG_MAP = {
     "mr-IN": ["mr", "en"],
     "pa-IN": ["pa", "en"],
     "ur-IN": ["ur", "en"],
+    "as-IN": ["as", "en"],      # Assamese
+    "ne-IN": ["ne", "en"],      # Nepali
 }
+
+# OCR optimization constants
+MAX_IMG_WIDTH = 1024        # Cap image width — legal fonts are readable at this size
+MIN_PAGE_VARIANCE = 500     # Skip near-blank pages (low pixel variance = mostly white)
+DIGITAL_TEXT_THRESHOLD = 50 # If PyMuPDF extracts >50 chars, skip OCR for that page (English only)
 
 
 class DocumentParser:
@@ -84,56 +91,113 @@ class DocumentParser:
 
     async def _extract_pdf_scanned(self, content: bytes, ocr_language: str = "en-IN") -> str:
         """Extract text from scanned PDF using EasyOCR (fully local).
-        Optimized: 150 DPI grayscale + parallel page OCR across CPU cores."""
+        Optimizations:
+          1. For English-only: try digital text first — skip OCR for pages with extractable text
+          2. For non-English: ALWAYS OCR (PyMuPDF extracts garbled text from scanned Indic scripts)
+          3. Skip near-blank pages (low pixel variance)
+          4. Downscale images to max 1024px width
+          5. Parallel OCR across CPU cores
+        """
         self._needs_ocr = True
 
         langs = _LANG_MAP.get(ocr_language, ["en"])
-        reader = _get_reader(langs)
+        is_english_only = langs == ["en"]
 
-        # Step 1: Render all pages to grayscale images (fast, ~50ms/page)
-        page_images = []
+        # Step 1: Try digital extraction (English only) + render pages that need OCR
+        pages_needing_ocr = []
+        digital_texts = {}  # page_idx -> text (from PyMuPDF)
+        skipped_blank = 0
+
         with pymupdf.open(stream=content, filetype="pdf") as doc:
             self._page_count = len(doc)
             for i, page in enumerate(doc):
+                # For English-only: try digital text extraction first
+                # For non-English: SKIP — PyMuPDF extracts garbled text from scanned Indic scripts
+                if is_english_only:
+                    digital_text = page.get_text().strip()
+                    if len(digital_text) >= DIGITAL_TEXT_THRESHOLD:
+                        digital_texts[i] = digital_text
+                        continue
+
+                # Render to image for OCR
                 try:
-                    pix = page.get_pixmap(dpi=150, colorspace=pymupdf.csGRAY)
+                    pix = page.get_pixmap(dpi=100, colorspace=pymupdf.csGRAY)
                     img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                         pix.height, pix.width
                     )
-                    page_images.append((i, img_array))
+
+                    # Skip near-blank pages
+                    if np.var(img_array) < MIN_PAGE_VARIANCE:
+                        skipped_blank += 1
+                        digital_texts[i] = ""
+                        continue
+
+                    # Downscale if wider than MAX_IMG_WIDTH
+                    if img_array.shape[1] > MAX_IMG_WIDTH:
+                        scale = MAX_IMG_WIDTH / img_array.shape[1]
+                        new_h = int(img_array.shape[0] * scale)
+                        # Fast nearest-neighbor resize without PIL/cv2
+                        row_idx = (np.arange(new_h) / scale).astype(int)
+                        col_idx = (np.arange(MAX_IMG_WIDTH) / scale).astype(int)
+                        img_array = img_array[row_idx][:, col_idx]
+
+                    pages_needing_ocr.append((i, img_array))
                 except Exception as e:
                     logger.warning("Render failed for page %d: %s", i + 1, e)
-                    page_images.append((i, None))
+                    digital_texts[i] = f"[Render failed for page {i + 1}]"
 
-        # Step 2: OCR all pages in parallel using thread pool
-        max_workers = min(len(page_images), max(1, os.cpu_count() or 2))
-
-        def _ocr_page(args):
-            idx, img = args
-            if img is None:
-                return idx, f"[Render failed for page {idx + 1}]"
-            try:
-                result = reader.readtext(img, detail=0, paragraph=True)
-                text = "\n".join(result) if result else ""
-                logger.debug("Page %d: %d chars extracted", idx + 1, len(text))
-                return idx, text
-            except Exception as e:
-                logger.warning("OCR failed for page %d: %s", idx + 1, e)
-                return idx, f"[OCR failed for page {idx + 1}]"
-
-        loop = asyncio.get_event_loop()
-        results = await loop.run_in_executor(
-            None,
-            lambda: list(ThreadPoolExecutor(max_workers=max_workers).map(_ocr_page, page_images))
+        logger.info(
+            "OCR prep — %d pages total, %d digital (skipped), %d blank (skipped), %d need OCR",
+            self._page_count, len(digital_texts), skipped_blank, len(pages_needing_ocr)
         )
 
-        # Sort by page index and collect texts
-        results.sort(key=lambda x: x[0])
-        page_texts = [text for _, text in results]
+        # Step 2: OCR only the pages that need it
+        ocr_results = {}
+        if pages_needing_ocr:
+            reader = _get_reader(langs)
+            max_workers = min(len(pages_needing_ocr), max(1, os.cpu_count() or 2))
+
+            def _ocr_page(args):
+                idx, img = args
+                try:
+                    kwargs = {"detail": 0, "paragraph": True}
+                    # Allowlist for English — fewer candidates = faster recognition
+                    if is_english_only:
+                        kwargs["allowlist"] = (
+                            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                            "0123456789.,;:!?'\"-()[]{}/@#$%&*+=<> \n₹"
+                        )
+                    result = reader.readtext(img, **kwargs)
+                    text = "\n".join(result) if result else ""
+                    return idx, text
+                except Exception as e:
+                    logger.warning("OCR failed for page %d: %s", idx + 1, e)
+                    return idx, f"[OCR failed for page {idx + 1}]"
+
+            loop = asyncio.get_event_loop()
+            results = await loop.run_in_executor(
+                None,
+                lambda: list(ThreadPoolExecutor(max_workers=max_workers).map(_ocr_page, pages_needing_ocr))
+            )
+            for idx, text in results:
+                ocr_results[idx] = text
+
+        # Step 3: Merge digital + OCR results in page order
+        page_texts = []
+        for i in range(self._page_count):
+            if i in digital_texts:
+                page_texts.append(digital_texts[i])
+            elif i in ocr_results:
+                page_texts.append(ocr_results[i])
+            else:
+                page_texts.append("")
 
         self._page_texts = page_texts
-        logger.info("EasyOCR completed — %d pages, %d total chars, %d workers",
-                     len(page_texts), sum(len(t) for t in page_texts), max_workers)
+
+        ocr_count = len(pages_needing_ocr)
+        total_chars = sum(len(t) for t in page_texts)
+        logger.info("OCR completed — %d pages, %d OCR'd, %d skipped, %d total chars",
+                     self._page_count, ocr_count, len(digital_texts), total_chars)
 
         full_text = "\n\n".join(t for t in page_texts if t)
         if not full_text.strip():

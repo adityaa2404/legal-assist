@@ -1,6 +1,8 @@
 import React from 'react';
 import { useSession } from '@/hooks/useSession';
 import ClauseExplorer from './ClauseExplorer';
+import DisclaimerBanner from './DisclaimerBanner';
+import BackButton from './BackButton';
 
 const ClausesPage: React.FC = () => {
     const { analysis } = useSession();
@@ -15,6 +17,8 @@ const ClausesPage: React.FC = () => {
 
     return (
         <div className="p-6 lg:p-10 max-w-4xl mx-auto space-y-8 animate-fade-in">
+            <BackButton to="/app" label="Back to Overview" />
+
             {/* Header */}
             <div>
                 <h1 className="font-headline font-extrabold text-3xl tracking-tight mb-2">Key Clauses</h1>
@@ -44,6 +48,9 @@ const ClausesPage: React.FC = () => {
 
             {/* Clause cards */}
             <ClauseExplorer clauses={analysis.key_clauses} />
+
+            {/* Disclaimer */}
+            <DisclaimerBanner compact />
         </div>
     );
 };

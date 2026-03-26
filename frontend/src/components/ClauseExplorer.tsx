@@ -1,21 +1,65 @@
 import React, { useState } from 'react';
 import { Clause } from '@/types';
+import { useSession } from '@/hooks/useSession';
 import Icon from './ui/icon';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from './ui/collapsible';
 import { cn } from '@/lib/utils';
+import axiosClient from '@/api/axiosClient';
 
 interface ClauseExplorerProps {
     clauses: Clause[];
 }
 
 const importanceBadge = {
-    critical: { bg: 'bg-error-container', text: 'text-on-error-container', label: 'Critical' },
-    important: { bg: 'bg-secondary-container', text: 'text-on-secondary-container', label: 'Important' },
-    standard: { bg: 'bg-surface-container', text: 'text-on-surface-variant', label: 'Standard' },
+    critical: { bg: 'bg-error-container', text: 'text-on-error-container', label: 'Critical', border: 'bg-error', icon: 'warning' as const },
+    important: { bg: 'bg-secondary-container', text: 'text-on-secondary-container', label: 'Important', border: 'bg-tertiary-fixed-dim', icon: 'info' as const },
+    standard: { bg: 'bg-surface-container', text: 'text-on-surface-variant', label: 'Standard', border: 'bg-secondary-container', icon: 'article' as const },
 };
 
 const ClauseExplorer: React.FC<ClauseExplorerProps> = ({ clauses }) => {
     const [expanded, setExpanded] = useState<number | null>(null);
+    const [savedSet, setSavedSet] = useState<Set<number>>(new Set());
+    const [savingIdx, setSavingIdx] = useState<number | null>(null);
+    const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+    const { session } = useSession();
+
+    const handleCopyClause = async (clause: Clause, idx: number) => {
+        const text = `${clause.clause_title}\n\n${clause.clause_text}\n\nPlain English: ${clause.plain_english}`;
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopiedIdx(idx);
+            setTimeout(() => setCopiedIdx(null), 2000);
+        } catch {
+            // Fallback for older browsers
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            setCopiedIdx(idx);
+            setTimeout(() => setCopiedIdx(null), 2000);
+        }
+    };
+
+    const handleSaveClause = async (clause: Clause, idx: number) => {
+        if (!session || savedSet.has(idx)) return;
+        setSavingIdx(idx);
+        try {
+            await axiosClient.post('/clause-library', {
+                clause_title: clause.clause_title,
+                clause_text: clause.clause_text,
+                plain_english: clause.plain_english,
+                importance: clause.importance,
+                source_filename: session.document_metadata.filename,
+            });
+            setSavedSet(prev => new Set(prev).add(idx));
+        } catch (err) {
+            console.error('Failed to save clause:', err);
+        } finally {
+            setSavingIdx(null);
+        }
+    };
 
     return (
         <div className="space-y-4 animate-fade-in">
@@ -26,17 +70,20 @@ const ClauseExplorer: React.FC<ClauseExplorerProps> = ({ clauses }) => {
                 return (
                     <div
                         key={idx}
-                        className="bg-surface-container-lowest rounded-xl overflow-hidden animate-fade-in"
+                        className="bg-surface-container-lowest rounded-xl overflow-hidden animate-fade-in relative"
                         style={{ animationDelay: `${idx * 60}ms` }}
                     >
+                        {/* Left severity bar */}
+                        <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${badge.border} rounded-l-xl`} />
+
                         <Collapsible
                             open={isOpen}
                             onOpenChange={(open) => setExpanded(open ? idx : null)}
                         >
                             <CollapsibleTrigger className="w-full cursor-pointer">
-                                <div className="flex items-center justify-between p-5 text-left gap-3 hover:bg-surface-container-low/50 transition-colors">
+                                <div className="flex items-center justify-between p-5 pl-6 text-left gap-3 hover:bg-surface-container-low/50 transition-colors">
                                     <div className="flex items-center gap-3 min-w-0">
-                                        <Icon name="article" className="text-on-surface-variant shrink-0" />
+                                        <Icon name={badge.icon} className="text-on-surface-variant shrink-0" />
                                         <span className="text-sm font-bold truncate">{clause.clause_title}</span>
                                         <span className={`${badge.bg} ${badge.text} text-[10px] font-black px-2 py-0.5 rounded-full uppercase shrink-0`}>
                                             {badge.label}
@@ -68,6 +115,25 @@ const ClauseExplorer: React.FC<ClauseExplorerProps> = ({ clauses }) => {
                                             <span className="font-bold text-on-surface">In plain terms: </span>
                                             {clause.plain_english}
                                         </p>
+                                    </div>
+
+                                    {/* Action buttons */}
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={() => handleCopyClause(clause, idx)}
+                                            className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border border-border hover:border-primary/40 hover:text-primary transition-all"
+                                        >
+                                            <Icon name={copiedIdx === idx ? 'check' : 'content_copy'} size="sm" />
+                                            {copiedIdx === idx ? 'Copied!' : 'Copy'}
+                                        </button>
+                                        <button
+                                            onClick={() => handleSaveClause(clause, idx)}
+                                            disabled={savingIdx === idx || savedSet.has(idx)}
+                                            className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border border-border hover:border-primary/40 hover:text-primary transition-all disabled:opacity-60"
+                                        >
+                                            <Icon name={savedSet.has(idx) ? 'bookmark_added' : 'bookmark_add'} size="sm" />
+                                            {savedSet.has(idx) ? 'Saved' : savingIdx === idx ? 'Saving...' : 'Save to Library'}
+                                        </button>
                                     </div>
 
                                     {/* Rulebook references */}

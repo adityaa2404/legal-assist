@@ -2,6 +2,8 @@ import React from 'react';
 import { useSession } from '@/hooks/useSession';
 import RiskPanel from './RiskPanel';
 import Icon from './ui/icon';
+import DisclaimerBanner from './DisclaimerBanner';
+import BackButton from './BackButton';
 
 const RiskPage: React.FC = () => {
     const { analysis } = useSession();
@@ -15,6 +17,8 @@ const RiskPage: React.FC = () => {
 
     return (
         <div className="p-6 lg:p-10 max-w-4xl mx-auto space-y-10 animate-fade-in">
+            <BackButton to="/app" label="Back to Overview" />
+
             {/* Header */}
             <div>
                 <h1 className="font-headline font-extrabold text-3xl tracking-tight mb-2">Risk Report</h1>
@@ -88,6 +92,9 @@ const RiskPage: React.FC = () => {
 
             {/* Risk cards */}
             <RiskPanel risks={analysis.risks} score={score} />
+
+            {/* Disclaimer */}
+            <DisclaimerBanner />
         </div>
     );
 };
