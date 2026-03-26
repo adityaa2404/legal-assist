@@ -20,7 +20,8 @@ pytz
 matplotlib
 jinja2
 tiktoken
-pytesseract
-Pillow
+easyocr
+numpy
 rank-bm25
 sse-starlette
+dnspython

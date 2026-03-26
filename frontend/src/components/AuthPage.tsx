@@ -143,10 +143,10 @@ const AuthPage: React.FC = () => {
                                     type="password"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
-                                    placeholder="Min. 6 characters"
+                                    placeholder="Min. 8 characters, include a number"
                                     className="w-full pl-10 pr-4 py-3 bg-surface-container-lowest border border-outline-variant/30 rounded-lg focus:ring-0 focus:border-primary focus:bg-surface-container-low transition-all placeholder:text-outline-variant/60 text-sm"
                                     required
-                                    minLength={6}
+                                    minLength={8}
                                 />
                             </div>
                         </div>
@@ -175,9 +175,9 @@ const AuthPage: React.FC = () => {
                     </form>
 
                     <div className="mt-8 pt-6 border-t border-outline-variant/10 text-center">
-                        <a href="#" className="text-xs font-medium text-secondary hover:text-primary transition-colors underline decoration-outline-variant/30 underline-offset-4">
-                            Forgot your encryption key?
-                        </a>
+                        <p className="text-xs text-secondary">
+                            By signing in you agree to our terms of use.
+                        </p>
                     </div>
                 </div>
 

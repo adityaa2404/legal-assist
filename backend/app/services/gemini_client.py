@@ -22,7 +22,15 @@ async def _retry_on_rate_limit(coro_fn, max_retries=MAX_RETRIES):
     """Retry a Gemini API call with exponential backoff on 429 errors."""
     for attempt in range(max_retries + 1):
         try:
-            return await coro_fn()
+            return await asyncio.wait_for(
+                coro_fn(),
+                timeout=settings.GEMINI_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logging.error(f"Gemini call timed out after {settings.GEMINI_TIMEOUT}s (attempt {attempt + 1})")
+            if attempt < max_retries:
+                continue
+            raise Exception(f"AI request timed out after {settings.GEMINI_TIMEOUT}s")
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
@@ -43,7 +51,7 @@ class GeminiClient:
         prompt = self._get_analysis_prompt(analysis_type, anonymized_text)
 
         try:
-            response = await self.client.aio.models.generate_content(
+            response = await asyncio.wait_for(self.client.aio.models.generate_content(
                 model=MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -56,7 +64,7 @@ class GeminiClient:
                         types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
                     ],
                 ),
-            )
+            ), timeout=settings.GEMINI_TIMEOUT)
 
             if not response.text:
                 finish_reason = response.candidates[0].finish_reason if response.candidates else "unknown"
@@ -70,7 +78,7 @@ class GeminiClient:
             logging.warning("JSON parse failed on first attempt: %s — retrying", e)
             # One retry: Gemini is non-deterministic, second call often succeeds
             try:
-                response2 = await self.client.aio.models.generate_content(
+                response2 = await asyncio.wait_for(self.client.aio.models.generate_content(
                     model=MODEL,
                     contents=prompt,
                     config=types.GenerateContentConfig(
@@ -83,7 +91,7 @@ class GeminiClient:
                             types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
                         ],
                     ),
-                )
+                ), timeout=settings.GEMINI_TIMEOUT)
                 if response2.text:
                     clean_text2 = self._clean_json_response(response2.text)
                     return json.loads(clean_text2, strict=False)
@@ -255,7 +263,7 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
 
         messages = self._build_chat_messages(system_context, chat_history, anonymized_question)
 
-        response = await self.chat_client.aio.models.generate_content(
+        response = await asyncio.wait_for(self.chat_client.aio.models.generate_content(
             model=MODEL,
             contents=messages,
             config=types.GenerateContentConfig(
@@ -266,7 +274,7 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
                     types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
                 ],
             ),
-        )
+        ), timeout=settings.GEMINI_TIMEOUT)
         return response.text
 
     async def generate_json(self, prompt: str) -> Dict[str, Any]:
@@ -352,7 +360,7 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
 
         messages = self._build_chat_messages(system_context, chat_history, question)
 
-        response = await self.chat_client.aio.models.generate_content(
+        response = await asyncio.wait_for(self.chat_client.aio.models.generate_content(
             model=MODEL,
             contents=messages,
             config=types.GenerateContentConfig(
@@ -363,7 +371,7 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
                     types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
                 ],
             ),
-        )
+        ), timeout=settings.GEMINI_TIMEOUT)
         return response.text
 
     async def detect_pii(self, text: str) -> List[Dict[str, Any]]:
@@ -474,7 +482,7 @@ REQUIRED JSON STRUCTURE:
   "summary": "Plain-language summary (3-5 paragraphs, no legal jargon)",
   "document_type": "Classification (e.g., lease, NDA, employment, sale, loan, etc.)",
   "parties": [
-    {{"role": "The role of the party (e.g., Landlord, Tenant, Employer)", "name": "The anonymized name placeholder (e.g., [PERSON_1])"}}
+    {{"role": "The role of the party (e.g., Landlord, Tenant, Employer)", "name": "The person/org name as it appears in the document (could be anonymized like [PERSON_1] or the actual name)"}}
   ],
   "key_clauses": [
     {{
@@ -502,8 +510,8 @@ REQUIRED JSON STRUCTURE:
 IMPORTANT:
 - Escape any double quotes inside string values with a backslash.
 - Do NOT use unescaped newline characters inside strings.
-- The document uses anonymized placeholders like [PERSON_1], [AADHAAR_1], etc. Use these placeholders as-is in your response.
-- Do NOT attempt to guess the real values.
+- If the document uses anonymized placeholders like [PERSON_1], [AADHAAR_1], use them as-is.
+- If the document contains actual names (e.g., in non-English documents), use the actual names as they appear in the document.
 - overall_risk_score: You MUST calculate this using the 4-component formula below.
 
   COMPONENT A — Risk Severity (max 40 points):

@@ -1,4 +1,4 @@
-from motor.motor_asyncio import AsyncIOMotorClient
+from app.core.database import get_database
 from app.core.config import settings
 from app.models.user import UserCreate, UserInDB, UserResponse
 from datetime import datetime, timedelta, timezone
@@ -17,9 +17,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 class AuthService:
     def __init__(self):
-        self.client = AsyncIOMotorClient(settings.MONGODB_URI)
-        self.db = self.client[settings.MONGO_DB_NAME]
-        self.collection = self.db.users
+        db = get_database()
+        self.collection = db.users
 
     def _hash_password(self, password: str) -> str:
         return pwd_context.hash(password)

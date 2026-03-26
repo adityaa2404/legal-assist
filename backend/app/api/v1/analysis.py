@@ -10,6 +10,7 @@ from app.core.dependencies import (
 import logging
 from app.models.analysis import AnalysisResponse
 from app.services.report_generator import create_pdf_from_analysis
+from app.services.history_service import HistoryService
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,24 @@ async def analyze_document(
     result = await _get_or_run_analysis(
         session_id, analysis_type, session_service, pii_service, gemini, tree_search
     )
+
+    # Save to user's history (only full analysis, skip if already cached = already saved)
+    if analysis_type == "full":
+        cached_before = await session_service.get_analysis(session_id, "_history_saved")
+        if not cached_before:
+            try:
+                session = await session_service.get(session_id)
+                history = HistoryService()
+                await history.save(
+                    current_user, result, session.document_metadata,
+                    page_texts=session.page_texts,
+                    htoc_tree=session.htoc_tree,
+                    pii_mapping=session.pii_mapping,
+                )
+                await session_service.save_analysis(session_id, "_history_saved", {"saved": True})
+            except Exception as e:
+                logger.warning(f"Failed to save history: {e}")
+
     return AnalysisResponse(**result)
 
 

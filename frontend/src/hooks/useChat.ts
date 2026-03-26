@@ -1,20 +1,47 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { ChatMessage, SourceSection } from '@/types';
 import { chatApi } from '@/api/chatApi';
+
+const CHAT_KEY = 'lawbuddy_chat_messages';
 
 export interface ChatMessageWithSources extends ChatMessage {
     source_sections?: SourceSection[];
 }
 
 export const useChat = (sessionId: string | null) => {
-    const [messages, setMessages] = useState<ChatMessageWithSources[]>([]);
+    const [messages, setMessages] = useState<ChatMessageWithSources[]>(() => {
+        if (!sessionId) return [];
+        try {
+            const stored = sessionStorage.getItem(`${CHAT_KEY}_${sessionId}`);
+            return stored ? JSON.parse(stored) : [];
+        } catch { return []; }
+    });
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    // Track if we're currently streaming (for UI: show cursor vs spinner)
     const [isStreaming, setIsStreaming] = useState(false);
-    // Ref to hold the current messages for history (avoids stale closure)
     const messagesRef = useRef<ChatMessageWithSources[]>([]);
     messagesRef.current = messages;
+
+    // Persist messages to sessionStorage whenever they change
+    useEffect(() => {
+        if (sessionId && messages.length > 0) {
+            sessionStorage.setItem(`${CHAT_KEY}_${sessionId}`, JSON.stringify(messages));
+        }
+    }, [messages, sessionId]);
+
+    // Reset messages when sessionId changes
+    useEffect(() => {
+        if (!sessionId) {
+            setMessages([]);
+            return;
+        }
+        try {
+            const stored = sessionStorage.getItem(`${CHAT_KEY}_${sessionId}`);
+            setMessages(stored ? JSON.parse(stored) : []);
+        } catch {
+            setMessages([]);
+        }
+    }, [sessionId]);
 
     const sendMessage = useCallback(async (content: string) => {
         if (!sessionId) return;
@@ -23,16 +50,13 @@ export const useChat = (sessionId: string | null) => {
         setIsStreaming(false);
         setError(null);
 
-        // Optimistic update — add user message
         const userMessage: ChatMessageWithSources = { role: 'user', content };
         const currentMessages = [...messagesRef.current, userMessage];
         setMessages(currentMessages);
 
-        // Prepare history from messages before this one
         const history = messagesRef.current.map(m => ({ role: m.role, content: m.content }));
 
         try {
-            // Add a placeholder assistant message that we'll stream into
             const placeholderAssistant: ChatMessageWithSources = {
                 role: 'assistant',
                 content: '',
@@ -49,7 +73,6 @@ export const useChat = (sessionId: string | null) => {
                 {
                     onToken: (text: string) => {
                         accumulatedText += text;
-                        // Update the last message (assistant placeholder) with new text
                         setMessages(prev => {
                             const updated = [...prev];
                             const lastIdx = updated.length - 1;
@@ -62,7 +85,6 @@ export const useChat = (sessionId: string | null) => {
                     },
                     onSources: (sections: SourceSection[]) => {
                         sourceSections = sections;
-                        // Update sources on the assistant message
                         setMessages(prev => {
                             const updated = [...prev];
                             const lastIdx = updated.length - 1;
@@ -74,7 +96,6 @@ export const useChat = (sessionId: string | null) => {
                         });
                     },
                     onDone: () => {
-                        // Finalize the message
                         setMessages(prev => {
                             const updated = [...prev];
                             const lastIdx = updated.length - 1;
@@ -88,7 +109,6 @@ export const useChat = (sessionId: string | null) => {
                     },
                     onError: (errorMsg: string) => {
                         setError(errorMsg);
-                        // Remove the empty placeholder if we errored before getting any text
                         if (!accumulatedText) {
                             setMessages(prev => prev.slice(0, -1));
                         }
@@ -97,7 +117,6 @@ export const useChat = (sessionId: string | null) => {
             );
         } catch (err: any) {
             setError(err.message || 'Failed to send message');
-            // Remove placeholder assistant message on failure
             setMessages(prev => {
                 const last = prev[prev.length - 1];
                 if (last?.role === 'assistant' && !last.content) {

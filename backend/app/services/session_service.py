@@ -1,16 +1,15 @@
-from motor.motor_asyncio import AsyncIOMotorClient
-from app.core.config import settings
+from app.core.database import get_database
 from app.models.session import Session, SessionCreate, SessionUpdate
 from typing import Optional
 from datetime import datetime, timedelta, timezone
+from app.core.config import settings
 from bson import ObjectId
 import uuid
 
 class SessionService:
     def __init__(self):
-        self.client = AsyncIOMotorClient(settings.MONGODB_URI)
-        self.db = self.client[settings.MONGO_DB_NAME]
-        self.collection = self.db.sessions
+        db = get_database()
+        self.collection = db.sessions
 
     async def create(
         self,

@@ -7,6 +7,7 @@ import AuthPage from './components/AuthPage';
 import RiskPage from './components/RiskPage';
 import ClausesPage from './components/ClausesPage';
 import ChatPage from './components/ChatPage';
+import HistoryPage from './components/HistoryPage';
 import { useSession } from './hooks/useSession';
 import { useAuth } from './contexts/AuthContext';
 import { useTheme } from './contexts/ThemeContext';
@@ -47,6 +48,7 @@ const TopBar: React.FC<{ minimal?: boolean }> = ({ minimal }) => {
             {[
               { label: 'Analysis', path: '/app' },
               { label: 'Upload', path: '/upload' },
+              { label: 'Profile', path: '/profile' },
             ].map(link => (
               <Link
                 key={link.label}
@@ -106,6 +108,7 @@ const SideNav: React.FC = () => {
     { icon: 'gavel', label: 'Risk Report', path: '/app/risks' },
     { icon: 'article', label: 'Clauses', path: '/app/clauses' },
     { icon: 'forum', label: 'Chat', path: '/app/chat' },
+    { icon: 'person', label: 'Profile', path: '/profile' },
   ];
 
   const isActive = (path: string) => {
@@ -155,14 +158,13 @@ const SideNav: React.FC = () => {
 
       {/* Bottom */}
       <div className="pt-4 border-t border-border space-y-1">
-        <Link to="#" className="flex items-center space-x-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-all hover:translate-x-1">
-          <Icon name="settings" />
-          <span className="text-sm">Settings</span>
-        </Link>
-        <Link to="#" className="flex items-center space-x-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-all hover:translate-x-1">
-          <Icon name="help_outline" />
-          <span className="text-sm">Support</span>
-        </Link>
+        <button
+          onClick={handleNewAnalysis}
+          className="flex items-center space-x-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-all hover:translate-x-1 w-full text-left"
+        >
+          <Icon name="logout" />
+          <span className="text-sm">New Session</span>
+        </button>
       </div>
     </aside>
   );
@@ -177,11 +179,7 @@ const Footer: React.FC = () => (
         <span className="font-bold text-outline font-headline text-sm">Legal Assist</span>
         <span className="font-mono text-[10px] tracking-tighter">&copy; 2025 Legal Assist. Zero Retention Guaranteed.</span>
       </div>
-      <nav className="flex space-x-6">
-        <a className="font-mono text-[10px] tracking-tighter text-muted-foreground hover:text-foreground transition-colors" href="#">Privacy Policy</a>
-        <a className="font-mono text-[10px] tracking-tighter text-muted-foreground hover:text-foreground transition-colors" href="#">Terms of Service</a>
-        <a className="font-mono text-[10px] tracking-tighter text-muted-foreground hover:text-foreground transition-colors" href="#">Security</a>
-      </nav>
+      <span className="font-mono text-[10px] tracking-tighter">AI-powered legal document analysis</span>
     </div>
   </footer>
 );
@@ -233,6 +231,15 @@ const App: React.FC = () => {
             <AuthRoute>
               <TopBar />
               <main className="flex-1"><UploadView /></main>
+              <Footer />
+            </AuthRoute>
+          } />
+
+          {/* Profile + History (authed) */}
+          <Route path="/profile" element={
+            <AuthRoute>
+              <TopBar />
+              <main className="flex-1"><HistoryPage /></main>
               <Footer />
             </AuthRoute>
           } />

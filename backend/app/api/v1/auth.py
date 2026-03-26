@@ -13,7 +13,7 @@ async def register(
 ):
     user = await auth_service.register(user_data)
     if not user:
-        raise HTTPException(409, "Email already registered")
+        raise HTTPException(409, "Registration failed. Please try a different email.")
 
     token = auth_service.create_access_token(user.email)
     return TokenResponse(

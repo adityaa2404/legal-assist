@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from contextlib import asynccontextmanager
 from app.core.config import settings
+from app.core.database import create_indexes, close_mongo_connection
 from app.api.v1.router import api_router
 import uvicorn
 import logging
@@ -20,9 +22,20 @@ for noisy in ("httpx", "httpcore", "google", "urllib3", "motor", "pymongo", "pre
 
 limiter = Limiter(key_func=get_remote_address)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: create indexes, verify Atlas connection
+    await create_indexes()
+    yield
+    # Shutdown: close MongoDB connection
+    await close_mongo_connection()
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan,
 )
 
 # Set up CORS
@@ -30,8 +43,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Session-ID"],
 )
 
 # Set up Rate Limiter

@@ -93,3 +93,23 @@ export interface LoginRequest {
     email: string;
     password: string;
 }
+
+// History types
+export interface HistoryItem {
+    created_at: string;
+    filename: string;
+    page_count: number;
+    document_type: string;
+    summary: string;
+    overall_risk_score: number;
+    parties: { role: string; name: string }[];
+    key_clauses: Clause[];
+    risks: Risk[];
+    obligations: { type?: string; description: string }[];
+    missing_clauses: string[];
+}
+
+export interface HistoryResponse {
+    history: HistoryItem[];
+    count: number;
+}

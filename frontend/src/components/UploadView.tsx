@@ -119,8 +119,9 @@ const UploadView: React.FC = () => {
             // Poll for OCR (scanned) or wait for HTOC (digital)
             if (sessionData.htoc_status === 'processing') {
                 const start = Date.now();
+                const ocrTimeout = 600000; // 10 min — EasyOCR on CPU is ~30-60s/page
                 let ocrDone = false;
-                while (Date.now() - start < 300000 && !ocrDone) {
+                while (Date.now() - start < ocrTimeout && !ocrDone) {
                     try {
                         const status = await pollStatus(sessionData.session_id);
                         if (status.has_text) { ocrDone = true; advanceStage(2); }
@@ -135,11 +136,12 @@ const UploadView: React.FC = () => {
                 await new Promise(r => setTimeout(r, 300));
             }
 
-            // Wait for index
+            // Wait for HTOC + BM25 index
             advanceStage(docType === 'scanned' ? 3 : 2);
             const indexStart = Date.now();
+            const indexTimeout = 300000; // 5 min — HTOC build uses Gemini API
             let indexReady = false;
-            while (Date.now() - indexStart < 120000 && !indexReady) {
+            while (Date.now() - indexStart < indexTimeout && !indexReady) {
                 try {
                     const status = await pollStatus(sessionData.session_id);
                     if (status.status === 'ready' || status.has_bm25 || status.status === 'failed') indexReady = true;

@@ -158,6 +158,11 @@ async def upload_document(
     # 2. Read file into memory (never touches disk)
     content = await file.read()
 
+    # 3. Check file size
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(413, f"File too large. Maximum size is {settings.MAX_FILE_SIZE_MB}MB")
+
     if doc_type == "scanned":
         # ── SCANNED PATH: everything runs in background ──
         # Get page count quickly (no OCR yet)
