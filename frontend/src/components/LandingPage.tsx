@@ -127,7 +127,7 @@ const LandingPage: React.FC = () => {
             <section className="px-6 py-20 bg-surface-low">
                 <div className="max-w-3xl mx-auto text-center space-y-6">
                     <h2 className="font-headline font-extrabold text-3xl tracking-tight">Ready to analyze?</h2>
-                    <p className="text-on-surface-variant">Upload your first document in under 30 seconds. No credit card required.</p>
+                    <p className="text-on-surface-variant">Upload your first document in under 150 seconds*. No credit card required.</p>
                     <button
                         onClick={handleCTA}
                         className="px-8 py-4 bg-gradient-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98]"
