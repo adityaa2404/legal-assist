@@ -120,11 +120,11 @@ class PIIAnonymizer:
             try:
                 results = recognizer.analyze(
                     text=text,
-                    entities=[recognizer.supported_entity],
+                    entities=[recognizer.supported_entities[0]],
                 )
                 all_results.extend(results)
             except Exception as e:
-                logger.debug("Recognizer %s failed: %s", recognizer.supported_entity, e)
+                logger.debug("Recognizer %s failed: %s", recognizer.supported_entities[0], e)
 
         # Filter by score threshold
         all_results = [r for r in all_results if r.score >= 0.4]
