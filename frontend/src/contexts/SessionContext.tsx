@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode } from 'react';
 import { Session, AnalysisResponse, HistoryItem } from '@/types';
 
 const SESSION_KEY = 'lawbuddy_session';
