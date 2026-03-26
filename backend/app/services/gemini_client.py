@@ -381,6 +381,42 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
         ), timeout=settings.GEMINI_TIMEOUT)
         return response.text
 
+    async def ocr_page_image(self, image_bytes: bytes, language_hint: str = "English") -> str:
+        """Extract text from a scanned page image using Gemini Vision."""
+        prompt = f"""Extract ALL text from this scanned document page.
+Language hint: {language_hint}.
+Rules:
+- Preserve the original layout and paragraph structure as much as possible.
+- Include all text: headers, footers, stamps, handwritten notes, table contents.
+- For tables, output rows separated by newlines with columns separated by | pipes.
+- Do NOT add any commentary, just return the extracted text exactly as it appears.
+- If the page is blank or unreadable, return an empty string."""
+
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+        text_part = types.Part.from_text(text=prompt)
+
+        async def _call():
+            return await self.client.aio.models.generate_content(
+                model=MODEL,
+                contents=[types.Content(role="user", parts=[image_part, text_part])],
+                config=types.GenerateContentConfig(
+                    temperature=0,
+                    safety_settings=[
+                        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                    ],
+                ),
+            )
+
+        try:
+            response = await _retry_on_rate_limit(_call)
+            return response.text.strip() if response.text else ""
+        except Exception as e:
+            logging.error(f"Gemini Vision OCR failed: {e}")
+            return ""
+
     async def detect_pii(self, text: str) -> List[Dict[str, Any]]:
         """Identifies PII in text using Gemini."""
         prompt = f"""

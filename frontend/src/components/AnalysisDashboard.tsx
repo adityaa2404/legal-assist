@@ -11,12 +11,42 @@ import {
 } from './ui/dropdown-menu';
 import axiosClient from '@/api/axiosClient';
 
+interface ProcessingStats {
+    totalTimeMs: number;
+    pageCount: number;
+    clauseCount: number;
+    stages: { label: string; durationMs: number }[];
+}
+
+function formatStatTime(ms: number): string {
+    const sec = ms / 1000;
+    if (sec < 60) return `${sec.toFixed(1)}s`;
+    return `${Math.floor(sec / 60)}m ${Math.floor(sec % 60)}s`;
+}
+
 const AnalysisDashboard: React.FC = () => {
     const { analysis, session } = useSession();
     const [downloading, setDownloading] = React.useState(false);
     const [emailModalOpen, setEmailModalOpen] = React.useState(false);
     const [emailAddress, setEmailAddress] = React.useState('');
     const [emailStatus, setEmailStatus] = React.useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+    const [processingStats, setProcessingStats] = React.useState<ProcessingStats | null>(() => {
+        try {
+            const stored = sessionStorage.getItem('lawbuddy_processing_stats');
+            if (stored) {
+                sessionStorage.removeItem('lawbuddy_processing_stats');
+                return JSON.parse(stored);
+            }
+        } catch { /* ignore */ }
+        return null;
+    });
+
+    // Auto-dismiss banner after 12 seconds
+    React.useEffect(() => {
+        if (!processingStats) return;
+        const id = setTimeout(() => setProcessingStats(null), 12000);
+        return () => clearTimeout(id);
+    }, [processingStats]);
 
     const handleDownloadReport = async (reportType: 'full' | 'short') => {
         if (!session) return;
@@ -126,6 +156,41 @@ const AnalysisDashboard: React.FC = () => {
     return (
         <div className="p-6 lg:p-10 space-y-8 animate-fade-in max-w-6xl mx-auto">
             <BackButton to="/upload" label="Back to Upload" />
+
+            {/* Processing summary banner */}
+            {processingStats && (
+                <div className="relative bg-green-500/5 border border-green-500/20 rounded-xl px-5 py-3.5 flex items-center justify-between animate-fade-in">
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <span
+                            className="material-symbols-outlined text-[18px] text-green-600 dark:text-green-400"
+                            style={{ fontVariationSettings: "'FILL' 1, 'wght' 600" }}
+                        >check_circle</span>
+                        <span className="text-sm font-bold text-foreground">
+                            Analyzed in {formatStatTime(processingStats.totalTimeMs)}
+                        </span>
+                        <span className="text-muted-foreground text-sm">&middot;</span>
+                        <span className="text-sm text-muted-foreground">{processingStats.pageCount} pages</span>
+                        <span className="text-muted-foreground text-sm">&middot;</span>
+                        <span className="text-sm text-muted-foreground">{processingStats.clauseCount} clauses found</span>
+                        {processingStats.stages.length > 0 && (
+                            <span className="hidden sm:inline-flex items-center gap-1.5 ml-2 text-[11px] font-mono text-muted-foreground">
+                                ({processingStats.stages.map((s, i) => (
+                                    <span key={i}>
+                                        {s.label}: {formatStatTime(s.durationMs)}
+                                        {i < processingStats.stages.length - 1 && <span className="mx-0.5">&rarr;</span>}
+                                    </span>
+                                ))})
+                            </span>
+                        )}
+                    </div>
+                    <button
+                        onClick={() => setProcessingStats(null)}
+                        className="shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    >
+                        <Icon name="close" size="sm" />
+                    </button>
+                </div>
+            )}
 
             {/* Document Info Bar */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-surface-low px-6 py-4 rounded-xl gap-4">

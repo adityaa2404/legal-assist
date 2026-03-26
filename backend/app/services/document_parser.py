@@ -55,18 +55,22 @@ class DocumentParser:
         self._needs_ocr = False
         self._page_texts: list = []
 
-    async def extract_async(self, content: bytes, content_type: str, doc_type: str = "digital", ocr_language: str = "en-IN") -> str:
+    async def extract_async(self, content: bytes, content_type: str, doc_type: str = "digital", ocr_language: str = "en-IN", ocr_mode: str = "fast", gemini_client=None) -> str:
         """
         Extract text from documents.
         - doc_type="digital": PyMuPDF direct text extraction
-        - doc_type="scanned": EasyOCR (local, no API calls, multi-language)
+        - doc_type="scanned" + ocr_mode="fast": Gemini Vision OCR (API-based, lightweight)
+        - doc_type="scanned" + ocr_mode="secure": EasyOCR (local, no API calls, multi-language)
         """
         self._needs_ocr = False
         self._page_texts = []
 
         if content_type == "application/pdf":
             if doc_type == "scanned":
-                return await self._extract_pdf_scanned(content, ocr_language)
+                if ocr_mode == "fast" and gemini_client:
+                    return await self._extract_pdf_gemini_vision(content, ocr_language, gemini_client)
+                else:
+                    return await self._extract_pdf_scanned(content, ocr_language)
             else:
                 return self._extract_pdf_digital(content)
         elif content_type in [
@@ -76,6 +80,78 @@ class DocumentParser:
             return self._extract_docx(content)
         else:
             raise HTTPException(status_code=400, detail="Unsupported file type")
+
+    # Language hint mapping for Gemini Vision
+    _VISION_LANG_MAP = {
+        "en-IN": "English", "hi-IN": "Hindi and English", "mr-IN": "Marathi and English",
+        "bn-IN": "Bengali and English", "ta-IN": "Tamil and English", "te-IN": "Telugu and English",
+        "gu-IN": "Gujarati and English", "kn-IN": "Kannada and English", "ml-IN": "Malayalam and English",
+        "pa-IN": "Punjabi and English", "ur-IN": "Urdu and English", "as-IN": "Assamese and English",
+        "ne-IN": "Nepali and English",
+    }
+
+    async def _extract_pdf_gemini_vision(self, content: bytes, ocr_language: str, gemini_client) -> str:
+        """Extract text from scanned PDF using Gemini Vision API (fast, parallel, API-based)."""
+        self._needs_ocr = True
+        lang_hint = self._VISION_LANG_MAP.get(ocr_language, "English")
+
+        # Step 1: Render all pages, separate digital vs needs-OCR
+        digital_texts = {}   # page_idx -> text
+        ocr_tasks = {}       # page_idx -> image_bytes
+
+        with pymupdf.open(stream=content, filetype="pdf") as doc:
+            self._page_count = len(doc)
+            for i, page in enumerate(doc):
+                digital_text = page.get_text().strip()
+                if len(digital_text) >= DIGITAL_TEXT_THRESHOLD:
+                    digital_texts[i] = digital_text
+                    continue
+                try:
+                    pix = page.get_pixmap(dpi=150)
+                    ocr_tasks[i] = pix.tobytes("png")
+                except Exception as e:
+                    logger.warning("Render failed for page %d: %s", i + 1, e)
+                    digital_texts[i] = f"[Render failed for page {i + 1}]"
+
+        # Step 2: OCR all pages in parallel (batch of concurrent Gemini calls)
+        ocr_results = {}
+        if ocr_tasks:
+            BATCH_SIZE = 5  # avoid hammering rate limits
+
+            async def _ocr_one(idx: int, img_bytes: bytes) -> tuple:
+                try:
+                    text = await gemini_client.ocr_page_image(img_bytes, lang_hint)
+                    logger.info("Gemini Vision OCR page %d/%d — %d chars", idx + 1, self._page_count, len(text))
+                    return idx, text
+                except Exception as e:
+                    logger.warning("Gemini Vision OCR failed for page %d: %s", idx + 1, e)
+                    return idx, f"[OCR failed for page {idx + 1}]"
+
+            items = list(ocr_tasks.items())
+            for batch_start in range(0, len(items), BATCH_SIZE):
+                batch = items[batch_start:batch_start + BATCH_SIZE]
+                results = await asyncio.gather(*[_ocr_one(idx, img) for idx, img in batch])
+                for idx, text in results:
+                    ocr_results[idx] = text
+
+        # Step 3: Merge in page order
+        page_texts = []
+        for i in range(self._page_count):
+            if i in digital_texts:
+                page_texts.append(digital_texts[i])
+            elif i in ocr_results:
+                page_texts.append(ocr_results[i])
+            else:
+                page_texts.append("")
+
+        self._page_texts = page_texts
+        full_text = "\n\n".join(t for t in page_texts if t)
+        if not full_text.strip():
+            raise HTTPException(500, "OCR returned no text. The document may be empty or unreadable.")
+
+        logger.info("Gemini Vision OCR done — %d pages (%d digital, %d OCR'd), %d total chars",
+                     self._page_count, len(digital_texts), len(ocr_results), len(full_text))
+        return full_text
 
     def _extract_pdf_digital(self, content: bytes) -> str:
         """Extract text from electronic PDF using PyMuPDF."""

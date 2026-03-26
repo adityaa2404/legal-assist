@@ -116,7 +116,11 @@ export const useChat = (sessionId: string | null) => {
                 }
             );
         } catch (err: any) {
-            setError(err.message || 'Failed to send message');
+            const status = err.response?.status;
+            const msg = status === 429
+                ? "Sorry, we aren't able to process your request at this moment"
+                : (err.message || 'Failed to send message');
+            setError(msg);
             setMessages(prev => {
                 const last = prev[prev.length - 1];
                 if (last?.role === 'assistant' && !last.content) {

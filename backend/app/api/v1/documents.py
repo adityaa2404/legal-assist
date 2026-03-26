@@ -50,6 +50,7 @@ async def _process_document_background(
     gemini: GeminiClient,
     htoc_builder: HTOCBuilder,
     session_service: SessionService,
+    ocr_mode: str = "fast",
 ):
     """
     Background task for scanned docs: OCR → PII → HTOC + BM25.
@@ -60,7 +61,7 @@ async def _process_document_background(
 
         # Step 1: OCR (only for scanned docs)
         parser = DocumentParser()
-        await parser.extract_async(content, content_type, doc_type, ocr_language)
+        await parser.extract_async(content, content_type, doc_type, ocr_language, ocr_mode=ocr_mode, gemini_client=gemini)
         raw_page_texts = parser.page_texts
 
         if not raw_page_texts or not any(t.strip() for t in raw_page_texts):
@@ -141,6 +142,7 @@ async def upload_document(
     file: UploadFile = File(...),
     doc_type: str = Form(default="digital"),
     ocr_language: str = Form(default="en-IN"),
+    ocr_mode: str = Form(default="fast"),
     current_user: str = Depends(get_current_user),
     pii_service: PIIAnonymizer = Depends(get_pii_service),
     parser: DocumentParser = Depends(get_parser),
@@ -190,7 +192,7 @@ async def upload_document(
             _process_document_background(
                 session.session_id, content, file.content_type,
                 doc_type, ocr_language, pii_service, gemini,
-                htoc_builder, session_service,
+                htoc_builder, session_service, ocr_mode=ocr_mode,
             )
         )
 
@@ -238,7 +240,7 @@ async def upload_document(
             _process_document_background(
                 session.session_id, content, file.content_type,
                 doc_type, ocr_language, pii_service, gemini,
-                htoc_builder, session_service,
+                htoc_builder, session_service, ocr_mode=ocr_mode,
             )
         )
 

@@ -50,6 +50,9 @@ export const chatApi = {
                 window.location.href = '/auth';
                 return;
             }
+            if (response.status === 429) {
+                throw new Error("Sorry, we aren't able to process your request at this moment");
+            }
             throw new Error(`Chat failed: ${response.status}`);
         }
 

@@ -1,9 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { uploadApi } from '@/api/uploadApi';
 import { analysisApi } from '@/api/analysisApi';
 import axiosClient from '@/api/axiosClient';
 import { useSession } from '@/hooks/useSession';
 import { useNavigate } from 'react-router-dom';
+import { useToast } from '@/contexts/ToastContext';
 import Icon from './ui/icon';
 import { cn } from '@/lib/utils';
 
@@ -23,24 +24,35 @@ const OCR_LANGUAGES = [
     { code: 'ne-IN', label: 'Nepali' },
 ];
 
-interface ProcessingStage {
+interface StageConfig {
     label: string;
+    icon: string;
     sublabel: string;
-    progress: number;
 }
 
-const DIGITAL_STAGES: ProcessingStage[] = [
-    { label: 'Upload & Extract', sublabel: 'Parsing document...', progress: 15 },
-    { label: 'Anonymize PII', sublabel: 'Removing personal data', progress: 40 },
-    { label: 'AI Analysis', sublabel: 'Generating report...', progress: 75 },
+interface StageTimer {
+    startedAt: number | null;
+    completedAt: number | null;
+}
+
+const DIGITAL_STAGES: StageConfig[] = [
+    { label: 'Extracting Text', icon: 'description', sublabel: 'Parsing document pages...' },
+    { label: 'Anonymizing PII', icon: 'shield', sublabel: 'Removing personal data...' },
+    { label: 'AI Analysis', icon: 'psychology', sublabel: 'Generating legal report...' },
 ];
 
-const SCANNED_STAGES: ProcessingStage[] = [
-    { label: 'Upload', sublabel: 'Sending file...', progress: 5 },
-    { label: 'Running OCR', sublabel: 'Extracting text from images', progress: 20 },
-    { label: 'Anonymize PII', sublabel: 'Removing personal data', progress: 50 },
-    { label: 'AI Analysis', sublabel: 'Generating report...', progress: 75 },
+const SCANNED_STAGES: StageConfig[] = [
+    { label: 'OCR & Text Extraction', icon: 'document_scanner', sublabel: 'Reading scanned pages...' },
+    { label: 'Anonymizing PII', icon: 'shield', sublabel: 'Removing personal data...' },
+    { label: 'AI Analysis', icon: 'psychology', sublabel: 'Generating legal report...' },
 ];
+
+function formatElapsed(ms: number): string {
+    if (ms < 0) return '0.0s';
+    const sec = ms / 1000;
+    if (sec < 60) return `${sec.toFixed(1)}s`;
+    return `${Math.floor(sec / 60)}m ${Math.floor(sec % 60)}s`;
+}
 
 async function pollStatus(sessionId: string): Promise<{ status: string; has_text: boolean; has_bm25: boolean }> {
     const { data } = await axiosClient.get('/htoc-status', {
@@ -52,20 +64,42 @@ async function pollStatus(sessionId: string): Promise<{ status: string; has_text
 const UploadView: React.FC = () => {
     const { setSession, setAnalysis, setFileUrl } = useSession();
     const navigate = useNavigate();
+    const { toast } = useToast();
     const [isUploading, setIsUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [docType, setDocType] = useState<'digital' | 'scanned'>('digital');
+    const [ocrMode, setOcrMode] = useState<'fast' | 'secure'>('fast');
     const [ocrLanguage, setOcrLanguage] = useState('en-IN');
     const [isDragging, setIsDragging] = useState(false);
-    const [stageIndex, setStageIndex] = useState(0);
+    const [stageIndex, setStageIndex] = useState(-1);
+    const [now, setNow] = useState(Date.now());
+    const [allDone, setAllDone] = useState(false);
+    const stageTimesRef = useRef<StageTimer[]>([]);
 
     const stages = docType === 'scanned' ? SCANNED_STAGES : DIGITAL_STAGES;
-    const pipelineStatus = isUploading ? 'PROCESSING' : 'READY';
+    const isProcessing = isUploading || allDone;
+
+    // Live timer tick — 100ms interval while processing
+    useEffect(() => {
+        if (!isProcessing) return;
+        const id = setInterval(() => setNow(Date.now()), 100);
+        return () => clearInterval(id);
+    }, [isProcessing]);
 
     const advanceStage = useCallback((idx: number) => {
-        const s = (docType === 'scanned' ? SCANNED_STAGES : DIGITAL_STAGES);
-        if (idx < s.length) setStageIndex(idx);
-    }, [docType]);
+        const t = Date.now();
+        const timers = [...stageTimesRef.current];
+        for (let i = 0; i < idx; i++) {
+            if (timers[i] && !timers[i].completedAt) {
+                timers[i] = { ...timers[i], completedAt: t };
+            }
+        }
+        if (!timers[idx] || !timers[idx].startedAt) {
+            timers[idx] = { startedAt: t, completedAt: null };
+        }
+        stageTimesRef.current = timers;
+        setStageIndex(idx);
+    }, []);
 
     const handleFile = useCallback(async (file: File) => {
         if (!file) return;
@@ -77,14 +111,19 @@ const UploadView: React.FC = () => {
 
         setIsUploading(true);
         setError(null);
-        setStageIndex(0);
+        setAllDone(false);
+        stageTimesRef.current = [];
+        setStageIndex(-1);
 
         try {
             advanceStage(0);
             const formData = new FormData();
             formData.append('file', file);
             formData.append('doc_type', docType);
-            if (docType === 'scanned') formData.append('ocr_language', ocrLanguage);
+            if (docType === 'scanned') {
+                formData.append('ocr_language', ocrLanguage);
+                formData.append('ocr_mode', ocrMode);
+            }
 
             const sessionData = await uploadApi.upload(formData);
             advanceStage(1);
@@ -107,7 +146,7 @@ const UploadView: React.FC = () => {
             // Poll for text extraction + PII (scanned OCR or large digital docs)
             if (sessionData.htoc_status === 'processing') {
                 const start = Date.now();
-                const processingTimeout = 2400000; // 40 min — large docs: PII can take 10-30min
+                const processingTimeout = 2400000; // 40 min
                 let textDone = false;
                 while (Date.now() - start < processingTimeout && !textDone) {
                     try {
@@ -123,12 +162,35 @@ const UploadView: React.FC = () => {
                 if (!textDone) throw new Error('Document processing timed out');
             }
 
-            // Go straight to analysis — don't wait for HTOC
-            // HTOC + BM25 build continues in background (improves chat later)
-            advanceStage(stages.length - 1);
+            // AI Analysis stage
+            advanceStage(2);
             const analysisData = await analysisApi.analyze(sessionData.session_id);
+
+            // Complete final stage
+            const finalTime = Date.now();
+            const timers = [...stageTimesRef.current];
+            if (timers[2] && !timers[2].completedAt) {
+                timers[2] = { ...timers[2], completedAt: finalTime };
+            }
+            stageTimesRef.current = timers;
+
             setAnalysis(analysisData);
-            await new Promise(r => setTimeout(r, 400));
+            setAllDone(true);
+
+            // Store processing stats for dashboard summary banner
+            const firstStart = stageTimesRef.current[0]?.startedAt || finalTime;
+            const stageConfigs = docType === 'scanned' ? SCANNED_STAGES : DIGITAL_STAGES;
+            sessionStorage.setItem('lawbuddy_processing_stats', JSON.stringify({
+                totalTimeMs: finalTime - firstStart,
+                pageCount: sessionData.page_count,
+                clauseCount: analysisData.key_clauses.length,
+                stages: stageTimesRef.current.map((t, i) => ({
+                    label: stageConfigs[i]?.label || '',
+                    durationMs: t.completedAt && t.startedAt ? t.completedAt - t.startedAt : 0,
+                })),
+            }));
+
+            await new Promise(r => setTimeout(r, 800));
             navigate('/app');
         } catch (err: any) {
             const detail = err.response?.data?.detail;
@@ -137,11 +199,13 @@ const UploadView: React.FC = () => {
             } else {
                 setError(detail || err.message || 'Upload failed');
             }
-            setStageIndex(0);
+            setStageIndex(-1);
+            stageTimesRef.current = [];
+            setAllDone(false);
         } finally {
             setIsUploading(false);
         }
-    }, [docType, ocrLanguage, setSession, setFileUrl, setAnalysis, navigate, advanceStage, stages.length]);
+    }, [docType, ocrLanguage, ocrMode, setSession, setFileUrl, setAnalysis, navigate, advanceStage]);
 
     const onDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -263,6 +327,39 @@ const UploadView: React.FC = () => {
                             </div>
                         </div>
 
+                        {/* OCR Mode Toggle — only visible when scanned */}
+                        {docType === 'scanned' && (
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="font-bold text-sm">OCR Mode</p>
+                                    <p className="text-xs text-on-surface-variant">
+                                        {ocrMode === 'fast' ? 'Gemini Vision — fast, API-based' : 'Local processing — PII never leaves server'}
+                                    </p>
+                                </div>
+                                <div className="flex items-center bg-surface-container-high p-1 rounded-lg">
+                                    <button
+                                        onClick={() => setOcrMode('fast')}
+                                        className={cn(
+                                            "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
+                                            ocrMode === 'fast'
+                                                ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
+                                                : "text-on-surface-variant hover:text-on-surface"
+                                        )}
+                                    >
+                                        <Icon name="bolt" size="sm" />
+                                        Fast
+                                    </button>
+                                    <button
+                                        onClick={() => toast('Secure OCR (local processing) — coming soon!', 'info')}
+                                        className="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 text-on-surface-variant/50 cursor-not-allowed"
+                                    >
+                                        <Icon name="shield" size="sm" />
+                                        Secure
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Language Dropdown */}
                         <div className="space-y-3">
                             <label className="font-bold text-sm block">OCR Analysis Language</label>
@@ -282,58 +379,126 @@ const UploadView: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* Pipeline */}
-                    <div className="bg-surface-container-highest/50 rounded-xl p-8">
+                    {/* Pipeline with live timers */}
+                    <div className={cn(
+                        "rounded-xl p-8 transition-all",
+                        allDone
+                            ? "bg-green-500/5 border border-green-500/20"
+                            : "bg-surface-container-highest/50"
+                    )}>
                         <div className="flex items-center justify-between mb-6">
                             <h4 className="font-headline font-bold text-lg">Analysis Pipeline</h4>
                             <span className={cn(
-                                "font-mono text-[10px] px-2 py-0.5 rounded font-bold uppercase",
-                                isUploading
-                                    ? "bg-on-tertiary-container text-on-primary animate-pulse"
-                                    : "bg-primary-container text-on-primary"
+                                "font-mono text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider",
+                                allDone
+                                    ? "bg-green-500/15 text-green-600 dark:text-green-400"
+                                    : isProcessing
+                                    ? "bg-primary/10 text-primary animate-pulse"
+                                    : "bg-muted text-muted-foreground"
                             )}>
-                                {pipelineStatus}
+                                {allDone ? 'COMPLETE' : isProcessing ? 'PROCESSING' : 'READY'}
                             </span>
                         </div>
 
-                        <div className="space-y-6">
+                        <div className="space-y-1">
                             {stages.map((stage, idx) => {
-                                const isComplete = isUploading && idx < stageIndex;
-                                const isActive = isUploading && idx === stageIndex;
-                                const isPending = !isUploading || idx > stageIndex;
+                                const timer = stageTimesRef.current[idx];
+                                const isComplete = !!timer?.completedAt;
+                                const isActive = !!timer?.startedAt && !timer.completedAt;
+                                const isPending = !timer?.startedAt;
+
+                                const elapsed = isComplete
+                                    ? timer.completedAt! - timer.startedAt!
+                                    : isActive
+                                    ? now - timer.startedAt!
+                                    : 0;
 
                                 return (
-                                    <div key={idx} className={cn("flex items-start", isPending && !isActive && "opacity-40")}>
-                                        <div className="flex flex-col items-center mr-4">
-                                            <div className={cn(
-                                                "w-6 h-6 rounded-full border-2 flex items-center justify-center",
-                                                isComplete ? "border-primary bg-primary text-on-primary" :
-                                                isActive ? "border-on-tertiary-container bg-on-tertiary-container text-on-primary" :
-                                                "border-outline-variant"
-                                            )}>
-                                                {isComplete ? (
-                                                    <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 0, 'wght' 700" }}>check</span>
-                                                ) : isActive ? (
-                                                    <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
-                                                ) : (
-                                                    <span className="w-1.5 h-1.5 rounded-full bg-outline-variant" />
-                                                )}
-                                            </div>
-                                            {idx < stages.length - 1 && (
-                                                <div className={cn(
-                                                    "w-0.5 h-8 my-1",
-                                                    isComplete ? "bg-primary/40" : "bg-outline-variant/20"
-                                                )} />
+                                    <div
+                                        key={idx}
+                                        className={cn(
+                                            "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300",
+                                            isActive && "bg-primary/5",
+                                            isPending && !isProcessing && "opacity-50",
+                                            isPending && isProcessing && "opacity-30"
+                                        )}
+                                    >
+                                        {/* Status indicator */}
+                                        <div className={cn(
+                                            "w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-all duration-300",
+                                            isComplete ? "bg-green-500/15" :
+                                            isActive ? "bg-primary/15" :
+                                            "bg-muted"
+                                        )}>
+                                            {isComplete ? (
+                                                <span
+                                                    className="material-symbols-outlined text-[16px] text-green-600 dark:text-green-400"
+                                                    style={{ fontVariationSettings: "'FILL' 1, 'wght' 700" }}
+                                                >check_circle</span>
+                                            ) : isActive ? (
+                                                <span className="material-symbols-outlined text-[16px] text-primary animate-spin">progress_activity</span>
+                                            ) : (
+                                                <span className="material-symbols-outlined text-[14px] text-muted-foreground">{stage.icon}</span>
                                             )}
                                         </div>
-                                        <div>
-                                            <p className={cn("text-sm", isActive ? "font-bold" : "font-medium")}>{stage.label}</p>
-                                            <p className="text-[11px] text-on-surface-variant">{stage.sublabel}</p>
+
+                                        {/* Label & sublabel */}
+                                        <div className="flex-1 min-w-0">
+                                            <p className={cn(
+                                                "text-sm leading-tight transition-all",
+                                                isActive ? "font-bold text-foreground" :
+                                                isComplete ? "font-medium text-foreground" :
+                                                "font-medium text-muted-foreground"
+                                            )}>
+                                                {stage.label}
+                                            </p>
+                                            {isActive && (
+                                                <p className="text-[11px] text-muted-foreground mt-0.5 animate-fade-in">{stage.sublabel}</p>
+                                            )}
                                         </div>
+
+                                        {/* Timer */}
+                                        {(isComplete || isActive) && (
+                                            <span className={cn(
+                                                "font-mono text-xs tabular-nums shrink-0 transition-all",
+                                                isActive ? "text-primary font-bold" : "text-muted-foreground"
+                                            )}>
+                                                {formatElapsed(elapsed)}
+                                            </span>
+                                        )}
                                     </div>
                                 );
                             })}
                         </div>
+
+                        {/* Total time when all done */}
+                        {allDone && stageTimesRef.current.length > 0 && (() => {
+                            const first = stageTimesRef.current[0]?.startedAt || 0;
+                            const last = stageTimesRef.current[stageTimesRef.current.length - 1]?.completedAt || 0;
+                            const total = last - first;
+                            return (
+                                <div className="mt-5 pt-4 border-t border-green-500/20 animate-fade-in">
+                                    <div className="flex items-center justify-center gap-2 text-green-600 dark:text-green-400">
+                                        <span
+                                            className="material-symbols-outlined text-[18px]"
+                                            style={{ fontVariationSettings: "'FILL' 1, 'wght' 600" }}
+                                        >rocket_launch</span>
+                                        <span className="text-sm font-bold font-mono">
+                                            Analyzed in {formatElapsed(total)}
+                                        </span>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        {/* Idle state hint */}
+                        {!isProcessing && stageTimesRef.current.length === 0 && (
+                            <div className="mt-4 pt-4 border-t border-outline-variant/10">
+                                <p className="text-[11px] text-muted-foreground text-center font-mono uppercase tracking-wider">
+                                    Upload a document to begin
+                                </p>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
