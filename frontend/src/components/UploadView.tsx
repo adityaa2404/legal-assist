@@ -71,7 +71,7 @@ const UploadView: React.FC = () => {
     const [ocrMode, setOcrMode] = useState<'fast' | 'secure'>('fast');
     const [ocrLanguage, setOcrLanguage] = useState('en-IN');
     const [isDragging, setIsDragging] = useState(false);
-    const [stageIndex, setStageIndex] = useState(-1);
+    const [, setStageIndex] = useState(-1);
     const [now, setNow] = useState(Date.now());
     const [allDone, setAllDone] = useState(false);
     const stageTimesRef = useRef<StageTimer[]>([]);
