@@ -6,7 +6,7 @@ import BackButton from './BackButton';
 import Icon from './ui/icon';
 
 const ChatPage: React.FC = () => {
-    const { session, analysis, fileUrl } = useSession();
+    const { session, analysis } = useSession();
     const [showMobilePdf, setShowMobilePdf] = useState(false);
 
     if (!session || !analysis) return null;
