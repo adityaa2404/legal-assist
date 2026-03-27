@@ -1,11 +1,33 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import Icon from './ui/icon';
+import axiosClient from '@/api/axiosClient';
+
+type ServerStatus = 'checking' | 'live' | 'waking';
+
+function useServerStatus(): ServerStatus {
+    const [status, setStatus] = useState<ServerStatus>('checking');
+
+    useEffect(() => {
+        let mounted = true;
+        const check = () => {
+            axiosClient.get('/health', { timeout: 5000 })
+                .then(() => { if (mounted) setStatus('live'); })
+                .catch(() => { if (mounted) setStatus('waking'); });
+        };
+        check();
+        const id = setInterval(check, 15000);
+        return () => { mounted = false; clearInterval(id); };
+    }, []);
+
+    return status;
+}
 
 const LandingPage: React.FC = () => {
     const navigate = useNavigate();
     const { isAuthenticated } = useAuth();
+    const serverStatus = useServerStatus();
 
     const handleCTA = () => navigate(isAuthenticated ? '/upload' : '/auth');
 
@@ -13,9 +35,37 @@ const LandingPage: React.FC = () => {
         <div className="min-h-screen flex flex-col">
             {/* Hero */}
             <section className="flex-1 flex flex-col items-center justify-center px-6 py-24 text-center max-w-5xl mx-auto">
-                <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full mb-8">
-                    <Icon name="verified_user" size="sm" filled className="text-primary" />
-                    <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">Zero Retention Guarantee</span>
+                <div className="flex items-center gap-4 mb-8">
+                    <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full">
+                        <Icon name="verified_user" size="sm" filled className="text-primary" />
+                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">Zero Retention Guarantee</span>
+                    </div>
+                    <div className="inline-flex items-center gap-2 glass-badge px-3 py-2 rounded-full">
+                        {serverStatus === 'live' ? (
+                            <>
+                                <span className="relative flex h-2 w-2">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                                </span>
+                                <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-green-600 dark:text-green-400">Live</span>
+                            </>
+                        ) : serverStatus === 'waking' ? (
+                            <>
+                                <span className="relative flex h-2 w-2">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75" />
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+                                </span>
+                                <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-amber-600 dark:text-amber-400">Waking up...</span>
+                            </>
+                        ) : (
+                            <>
+                                <span className="relative flex h-2 w-2">
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-muted-foreground animate-pulse" />
+                                </span>
+                                <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-muted-foreground">Checking...</span>
+                            </>
+                        )}
+                    </div>
                 </div>
 
                 <h1 className="font-headline font-extrabold text-5xl sm:text-6xl md:text-7xl tracking-tight text-foreground leading-[1.05] mb-6">
