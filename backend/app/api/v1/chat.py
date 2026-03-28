@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from fastapi import APIRouter, Depends, Header, HTTPException, Body
 from fastapi.responses import StreamingResponse
 from app.services.session_service import SessionService
@@ -12,6 +13,9 @@ from app.core.dependencies import (
     get_current_user, get_tree_search,
 )
 from app.models.chat import ChatRequest, ChatResponse
+
+# Regex to detect incomplete PII tokens at the end of a chunk (e.g. "[PERS" or "[PERSON_1")
+_PARTIAL_TOKEN_RE = re.compile(r'\[[A-Z_0-9]*$')
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +91,8 @@ async def chat_with_document(
     gemini: GeminiClient = Depends(get_gemini_client),
     tree_search: TreeSearchService = Depends(get_tree_search),
 ):
-    # 1. Retrieve session
-    session = await session_service.get(session_id)
+    # 1. Retrieve session (with ownership check)
+    session = await session_service.get_for_user(session_id, current_user)
     if not session:
         raise HTTPException(404, "Session expired or not found")
 
@@ -97,7 +101,7 @@ async def chat_with_document(
     if not session.anonymized_text and status in ("processing",):
         raise HTTPException(202, "Document is still being processed (OCR in progress). Please wait a few seconds.")
 
-    # 2. Anonymize the question and history
+    # 2. Anonymize the question (history is already short user text — anonymize only the new message)
     anonymized_question, _ = await pii_service.anonymize(request.message)
 
     anonymized_history = []
@@ -170,7 +174,8 @@ async def chat_with_document(
                 trimmed_history,
             )
         except Exception as e:
-            raise HTTPException(500, "Chat failed: {}".format(str(e)))
+            logger.error("Chat failed: %s", e)
+            raise HTTPException(500, "Chat failed. Please try again.")
 
     # 6. De-anonymize response
     final_response = pii_service.deanonymize(anonymized_response, session.pii_mapping)
@@ -211,8 +216,8 @@ async def chat_with_document_stream(
       - event: done    → data: {}
       - event: error   → data: {"error": "message"}
     """
-    # 1. Retrieve session
-    session = await session_service.get(session_id)
+    # 1. Retrieve session (with ownership check)
+    session = await session_service.get_for_user(session_id, current_user)
     if not session:
         raise HTTPException(404, "Session expired or not found")
 
@@ -274,9 +279,12 @@ async def chat_with_document_stream(
             "{} (p.{})".format(s["title"], s["pages"]) for s in source_sections
         )
 
-    # 6. Stream response
+    # 6. Stream response with buffered deanonymization
+    #    Tokens like [PERSON_1] can be split across chunks, so we buffer
+    #    any trailing partial "[..." and flush it with the next chunk.
     async def event_stream():
         full_response_parts = []
+        buffer = ""
 
         try:
             # Send sources first so frontend can display them immediately
@@ -299,9 +307,26 @@ async def chat_with_document_stream(
                 )
 
             async for chunk in stream:
-                # De-anonymize each chunk
-                clean_chunk = pii_service.deanonymize(chunk, session.pii_mapping)
                 full_response_parts.append(chunk)  # Store anonymized for cache
+                buffer += chunk
+
+                # Check for incomplete PII token at end of buffer
+                partial = _PARTIAL_TOKEN_RE.search(buffer)
+                if partial:
+                    # Hold back the partial token, emit everything before it
+                    emit = buffer[:partial.start()]
+                    buffer = buffer[partial.start():]
+                else:
+                    emit = buffer
+                    buffer = ""
+
+                if emit:
+                    clean_chunk = pii_service.deanonymize(emit, session.pii_mapping)
+                    yield f"event: token\ndata: {json.dumps({'text': clean_chunk})}\n\n"
+
+            # Flush remaining buffer
+            if buffer:
+                clean_chunk = pii_service.deanonymize(buffer, session.pii_mapping)
                 yield f"event: token\ndata: {json.dumps({'text': clean_chunk})}\n\n"
 
             yield "event: done\ndata: {}\n\n"
@@ -318,6 +343,6 @@ async def chat_with_document_stream(
 
         except Exception as e:
             logger.error("Stream error: %s", e)
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            yield f"event: error\ndata: {json.dumps({'error': 'An error occurred during streaming. Please try again.'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

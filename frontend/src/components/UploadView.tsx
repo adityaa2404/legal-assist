@@ -3,8 +3,9 @@ import { uploadApi } from '@/api/uploadApi';
 import { analysisApi } from '@/api/analysisApi';
 import axiosClient from '@/api/axiosClient';
 import { useSession } from '@/hooks/useSession';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useToast } from '@/contexts/ToastContext';
+import { UploadResponse } from '@/types';
 import Icon from './ui/icon';
 import { cn } from '@/lib/utils';
 
@@ -64,6 +65,7 @@ async function pollStatus(sessionId: string): Promise<{ status: string; has_text
 const UploadView: React.FC = () => {
     const { setSession, setAnalysis, setFileUrl } = useSession();
     const navigate = useNavigate();
+    const location = useLocation();
     const { toast } = useToast();
     const [isUploading, setIsUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -75,6 +77,7 @@ const UploadView: React.FC = () => {
     const [now, setNow] = useState(Date.now());
     const [allDone, setAllDone] = useState(false);
     const stageTimesRef = useRef<StageTimer[]>([]);
+    const resumedRef = useRef(false);
 
     const stages = docType === 'scanned' ? SCANNED_STAGES : DIGITAL_STAGES;
     const isProcessing = isUploading || allDone;
@@ -100,6 +103,111 @@ const UploadView: React.FC = () => {
         stageTimesRef.current = timers;
         setStageIndex(idx);
     }, []);
+
+    // Resume from ImageCapturePage: images were uploaded, session is in "processing" state
+    useEffect(() => {
+        const state = location.state as { imageSession?: UploadResponse } | null;
+        if (!state?.imageSession || resumedRef.current) return;
+        resumedRef.current = true;
+
+        // Clear navigation state so refresh doesn't re-trigger
+        window.history.replaceState({}, document.title);
+
+        const sessionData = state.imageSession;
+        setDocType('scanned'); // use scanned stages (OCR pipeline)
+
+        (async () => {
+            setIsUploading(true);
+            setError(null);
+            setAllDone(false);
+            stageTimesRef.current = SCANNED_STAGES.map(() => ({ startedAt: null, completedAt: null }));
+
+            try {
+                advanceStage(0);
+
+                setSession({
+                    session_id: sessionData.session_id,
+                    created_at: new Date().toISOString(),
+                    expires_at: new Date(Date.now() + sessionData.expires_in_seconds * 1000).toISOString(),
+                    pii_mapping: {},
+                    document_metadata: {
+                        filename: sessionData.filename,
+                        page_count: sessionData.page_count,
+                        size_bytes: 0,
+                        needs_ocr: true,
+                        uploaded_at: new Date().toISOString(),
+                    },
+                });
+
+                // Fetch stitched PDF for viewer + download
+                try {
+                    const pdfRes = await axiosClient.get('/document/pdf', {
+                        headers: { 'X-Session-ID': sessionData.session_id },
+                        responseType: 'blob',
+                    });
+                    setFileUrl(URL.createObjectURL(pdfRes.data));
+                } catch {
+                    // Non-critical — viewer just won't show the PDF
+                }
+
+                // Poll for text extraction + PII
+                const start = Date.now();
+                let textDone = false;
+                while (Date.now() - start < 2400000 && !textDone) {
+                    try {
+                        const status = await pollStatus(sessionData.session_id);
+                        if (status.has_text || status.status === 'building' || status.status === 'ready') {
+                            textDone = true;
+                        } else if (status.status === 'failed') {
+                            throw new Error('Document processing failed.');
+                        }
+                    } catch (err: any) { if (err.message?.includes('failed')) throw err; }
+                    if (!textDone) await new Promise(r => setTimeout(r, 3000));
+                }
+                if (!textDone) throw new Error('Document processing timed out');
+
+                // PII done
+                advanceStage(1);
+                await new Promise(r => setTimeout(r, 200));
+
+                // AI Analysis
+                advanceStage(2);
+                const analysisData = await analysisApi.analyze(sessionData.session_id);
+
+                const finalTime = Date.now();
+                const timers = [...stageTimesRef.current];
+                if (timers[2] && !timers[2].completedAt) {
+                    timers[2] = { ...timers[2], completedAt: finalTime };
+                }
+                stageTimesRef.current = timers;
+
+                setAnalysis(analysisData);
+                setAllDone(true);
+
+                const firstStart = stageTimesRef.current[0]?.startedAt || finalTime;
+                sessionStorage.setItem('lawbuddy_processing_stats', JSON.stringify({
+                    totalTimeMs: finalTime - firstStart,
+                    pageCount: sessionData.page_count,
+                    clauseCount: analysisData.key_clauses.length,
+                    stages: stageTimesRef.current.map((t, i) => ({
+                        label: SCANNED_STAGES[i]?.label || '',
+                        durationMs: t.completedAt && t.startedAt ? t.completedAt - t.startedAt : 0,
+                    })),
+                }));
+
+                await new Promise(r => setTimeout(r, 800));
+                navigate('/app');
+            } catch (err: any) {
+                const detail = err.response?.data?.detail;
+                setError(detail || err.message || 'Processing failed');
+                setStageIndex(-1);
+                stageTimesRef.current = [];
+                setAllDone(false);
+            } finally {
+                setIsUploading(false);
+            }
+        })();
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleFile = useCallback(async (file: File) => {
         if (!file) return;
@@ -264,6 +372,14 @@ const UploadView: React.FC = () => {
                             >
                                 Select Files from Device
                             </button>
+
+                            <Link
+                                to="/upload/capture"
+                                className="mt-5 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary transition-colors group"
+                            >
+                                <Icon name="photo_camera" size="sm" className="group-hover:text-primary transition-colors" />
+                                <span>Don't have a PDF? <span className="underline underline-offset-2 font-medium">Upload images instead</span></span>
+                            </Link>
                         </div>
                     </div>
 

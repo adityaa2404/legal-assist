@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import LandingPage from './components/LandingPage';
 import UploadView from './components/UploadView';
+import ImageCapturePage from './components/ImageCapturePage';
 import AnalysisDashboard from './components/AnalysisDashboard';
 import AuthPage from './components/AuthPage';
 import RiskPage from './components/RiskPage';
@@ -293,6 +294,15 @@ const App: React.FC = () => {
             <AuthRoute>
               <TopBar />
               <main className="flex-1"><UploadView /></main>
+              <Footer />
+            </AuthRoute>
+          } />
+
+          {/* Image Capture (authed) */}
+          <Route path="/upload/capture" element={
+            <AuthRoute>
+              <TopBar />
+              <main className="flex-1"><ImageCapturePage /></main>
               <Footer />
             </AuthRoute>
           } />

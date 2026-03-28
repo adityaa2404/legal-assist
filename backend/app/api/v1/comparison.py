@@ -137,17 +137,22 @@ async def compare_documents(
     session_service: SessionService = Depends(get_session_service),
 ):
     """Compare analyses from two documents."""
+    # Verify session ownership
+    session_a = await session_service.get_for_user(body.session_id_a, current_user)
+    session_b = await session_service.get_for_user(body.session_id_b, current_user)
+    if not session_a:
+        raise HTTPException(404, "Session A expired or not found")
+    if not session_b:
+        raise HTTPException(404, "Session B expired or not found")
+
     # Load cached analyses
     analysis_a = await session_service.get_analysis(body.session_id_a, "full")
     analysis_b = await session_service.get_analysis(body.session_id_b, "full")
 
     if not analysis_a:
-        raise HTTPException(404, f"No analysis found for document A (session {body.session_id_a})")
+        raise HTTPException(404, "No analysis found for document A. Run analysis first.")
     if not analysis_b:
-        raise HTTPException(404, f"No analysis found for document B (session {body.session_id_b})")
-
-    session_a = await session_service.get(body.session_id_a)
-    session_b = await session_service.get(body.session_id_b)
+        raise HTTPException(404, "No analysis found for document B. Run analysis first.")
 
     doc_a_name = session_a.document_metadata.get("filename", "Document A") if session_a else "Document A"
     doc_b_name = session_b.document_metadata.get("filename", "Document B") if session_b else "Document B"

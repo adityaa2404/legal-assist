@@ -71,6 +71,7 @@ async def restore_session_from_history(
         htoc_tree=htoc_tree,
         bm25_data=bm25_data,
         htoc_status="ready",
+        user_email=current_user,
         document_metadata={
             "filename": item.get("filename", "Restored Document"),
             "page_count": item.get("page_count", len(page_texts)),

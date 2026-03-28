@@ -1,4 +1,5 @@
 from typing import Tuple, Dict, Any, List
+import asyncio
 import logging
 import re
 
@@ -104,13 +105,20 @@ class PIIAnonymizer:
     No spaCy model loaded — pure regex patterns, ~0MB overhead.
     """
 
-    def __init__(self, gemini_client: Any = None):
+    def __init__(self):
         pass
 
-    async def anonymize(self, text: str) -> Tuple[str, Dict[str, str]]:
+    async def anonymize(self, text: str, timeout: float = 60.0) -> Tuple[str, Dict[str, str]]:
         if not text:
             return "", {}
-        return self._anonymize_with_presidio(text)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._anonymize_with_presidio, text),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error("PII anonymization timed out after %.0fs on %d chars", timeout, len(text))
+            return text, {}  # Fail-open: text still protected by anonymized placeholders in prompts
 
     def _anonymize_with_presidio(self, text: str) -> Tuple[str, Dict[str, str]]:
         """Run all pattern recognizers on text, then build token mapping."""
@@ -151,15 +159,16 @@ class PIIAnonymizer:
             unique_entities[orig] = token
             mapping[token] = orig
 
-        # Perform replacements
+        # Single-pass replacement: one compiled regex instead of N sequential re.sub calls
         anonymized_text = text
-        for orig, token in unique_entities.items():
-            escaped_orig = re.escape(orig)
-            if orig.isalnum():
-                pattern = f"\\b{escaped_orig}\\b"
-            else:
-                pattern = escaped_orig
-            anonymized_text = re.sub(pattern, token, anonymized_text)
+        if unique_entities:
+            sorted_entities = sorted(unique_entities.keys(), key=len, reverse=True)
+            combined = "|".join(
+                (f"\\b{re.escape(orig)}\\b" if orig[0].isalnum() and orig[-1].isalnum() else re.escape(orig))
+                for orig in sorted_entities
+            )
+            compiled = re.compile(combined)
+            anonymized_text = compiled.sub(lambda m: unique_entities[m.group()], text)
 
         logger.info("PII: anonymized %d unique entities via Presidio patterns", len(mapping))
         return anonymized_text, mapping

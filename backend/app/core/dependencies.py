@@ -12,12 +12,18 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 _bearer_scheme = HTTPBearer()
 
+# Singleton — GeminiClient has no mutable state, underlying API clients are module-level
+_gemini_instance: GeminiClient = None
+
 
 def get_gemini_client() -> GeminiClient:
-    return GeminiClient()
+    global _gemini_instance
+    if _gemini_instance is None:
+        _gemini_instance = GeminiClient()
+    return _gemini_instance
 
-def get_pii_service(gemini: GeminiClient = Depends(get_gemini_client)) -> PIIAnonymizer:
-    return PIIAnonymizer(gemini_client=gemini)
+def get_pii_service() -> PIIAnonymizer:
+    return PIIAnonymizer()
 
 def get_parser() -> DocumentParser:
     return DocumentParser()

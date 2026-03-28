@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Header, Query
+from fastapi.responses import Response
 from app.services.pii_anonymizer import PIIAnonymizer
 from app.services.document_parser import DocumentParser
 from app.services.session_service import SessionService
@@ -10,10 +11,14 @@ from app.core.dependencies import (
     get_current_user, get_gemini_client, get_htoc_builder,
 )
 from app.core.config import settings
+from app.core.database import get_database
+from bson import Binary
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 import asyncio
 import logging
+import pymupdf
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +45,9 @@ ALLOWED_TYPES = [
 ]
 
 
+BACKGROUND_TASK_TIMEOUT = 600  # 10 minutes max for any background pipeline
+
+
 async def _process_document_background(
     session_id: str,
     content: bytes,
@@ -57,43 +65,58 @@ async def _process_document_background(
     For digital docs, only HTOC + BM25 runs here (OCR not needed).
     """
     try:
-        await session_service.set_htoc_status(session_id, "processing")
-
-        # Step 1: OCR (only for scanned docs)
-        parser = DocumentParser()
-        await parser.extract_async(content, content_type, doc_type, ocr_language, ocr_mode=ocr_mode, gemini_client=gemini)
-        raw_page_texts = parser.page_texts
-
-        if not raw_page_texts or not any(t.strip() for t in raw_page_texts):
-            await session_service.set_htoc_status(session_id, "failed")
-            logger.error(f"OCR returned no text for session {session_id}")
-            return
-
-        # Step 2: PII anonymization
-        joined_with_separators = PAGE_SEPARATOR.join(raw_page_texts)
-        anonymized_joined, pii_mapping = await pii_service.anonymize(joined_with_separators)
-        anonymized_pages = anonymized_joined.split(PAGE_SEPARATOR)
-        anonymized_text = "\n\n".join(anonymized_pages)
-
-        # Step 3: Update session with extracted text + PII mapping
-        await session_service.collection.update_one(
-            {"session_id": session_id},
-            {"$set": {
-                "anonymized_text": anonymized_text,
-                "page_texts": anonymized_pages,
-                "pii_mapping": pii_mapping,
-                "htoc_status": "building",
-                "document_metadata.page_count": parser.page_count,
-            }}
+        await asyncio.wait_for(
+            _process_document_inner(
+                session_id, content, content_type, doc_type, ocr_language,
+                pii_service, gemini, htoc_builder, session_service, ocr_mode,
+            ),
+            timeout=BACKGROUND_TASK_TIMEOUT,
         )
-        logger.info(f"OCR + PII done for session {session_id}, {len(anonymized_pages)} pages")
-
-        # Step 4: Build HTOC + BM25
-        await _build_htoc_and_bm25(session_id, anonymized_pages, gemini, htoc_builder, session_service)
-
-    except Exception as e:
-        logger.error(f"Background processing failed for {session_id}: {e}")
+    except asyncio.TimeoutError:
+        logger.error("Background processing timed out for session %s", session_id)
         await session_service.set_htoc_status(session_id, "failed")
+    except Exception as e:
+        logger.error("Background processing failed for %s: %s", session_id, e)
+        await session_service.set_htoc_status(session_id, "failed")
+
+
+async def _process_document_inner(
+    session_id, content, content_type, doc_type, ocr_language,
+    pii_service, gemini, htoc_builder, session_service, ocr_mode,
+):
+    await session_service.set_htoc_status(session_id, "processing")
+
+    # Step 1: OCR (only for scanned docs)
+    parser = DocumentParser()
+    await parser.extract_async(content, content_type, doc_type, ocr_language, ocr_mode=ocr_mode, gemini_client=gemini)
+    raw_page_texts = parser.page_texts
+
+    if not raw_page_texts or not any(t.strip() for t in raw_page_texts):
+        await session_service.set_htoc_status(session_id, "failed")
+        logger.error("OCR returned no text for session %s", session_id)
+        return
+
+    # Step 2: PII anonymization
+    joined_with_separators = PAGE_SEPARATOR.join(raw_page_texts)
+    anonymized_joined, pii_mapping = await pii_service.anonymize(joined_with_separators)
+    anonymized_pages = anonymized_joined.split(PAGE_SEPARATOR)
+    anonymized_text = "\n\n".join(anonymized_pages)
+
+    # Step 3: Update session with extracted text + PII mapping
+    await session_service.collection.update_one(
+        {"session_id": session_id},
+        {"$set": {
+            "anonymized_text": anonymized_text,
+            "page_texts": anonymized_pages,
+            "pii_mapping": pii_mapping,
+            "htoc_status": "building",
+            "document_metadata.page_count": parser.page_count,
+        }}
+    )
+    logger.info("OCR + PII done for session %s, %d pages", session_id, len(anonymized_pages))
+
+    # Step 4: Build HTOC + BM25
+    await _build_htoc_and_bm25(session_id, anonymized_pages, gemini, htoc_builder, session_service)
 
 
 async def _build_htoc_and_bm25(
@@ -168,7 +191,6 @@ async def upload_document(
     if doc_type == "scanned":
         # ── SCANNED PATH: everything runs in background ──
         # Get page count quickly (no OCR yet)
-        import pymupdf
         with pymupdf.open(stream=content, filetype="pdf") as doc:
             page_count = len(doc)
 
@@ -179,6 +201,7 @@ async def upload_document(
             page_texts=[],
             htoc_tree=None,
             htoc_status="processing",  # OCR in progress
+            user_email=current_user,
             document_metadata={
                 "filename": file.filename,
                 "page_count": page_count,
@@ -212,15 +235,18 @@ async def upload_document(
     try:
         raw_text = await parser.extract_async(content, file.content_type, doc_type, ocr_language)
     except Exception as e:
-        raise HTTPException(500, f"Failed to parse document: {str(e)}")
+        logger.error("Document parse failed: %s", e)
+        raise HTTPException(500, "Failed to parse document. The file may be corrupted or password-protected.")
 
     raw_page_texts = parser.page_texts
     joined_with_separators = PAGE_SEPARATOR.join(raw_page_texts)
 
-    # Large docs (>500K chars): PII is slow, run everything in background
-    LARGE_DOC_THRESHOLD = 500_000
-    if len(joined_with_separators) > LARGE_DOC_THRESHOLD:
-        logger.info("Large digital doc (%d chars) — backgrounding PII + HTOC", len(joined_with_separators))
+    # Large docs (>500K chars or >100 pages): PII can be slow, run in background
+    LARGE_DOC_CHAR_THRESHOLD = 500_000
+    LARGE_DOC_PAGE_THRESHOLD = 100
+    is_large = len(joined_with_separators) > LARGE_DOC_CHAR_THRESHOLD or parser.page_count > LARGE_DOC_PAGE_THRESHOLD
+    if is_large:
+        logger.info("Large digital doc (%d chars, %d pages) — backgrounding PII + HTOC", len(joined_with_separators), parser.page_count)
 
         session = await session_service.create(
             pii_mapping={},
@@ -228,6 +254,7 @@ async def upload_document(
             page_texts=[],
             htoc_tree=None,
             htoc_status="processing",
+            user_email=current_user,
             document_metadata={
                 "filename": file.filename,
                 "page_count": parser.page_count,
@@ -266,6 +293,7 @@ async def upload_document(
         page_texts=anonymized_pages,
         htoc_tree=None,
         htoc_status="building",
+        user_email=current_user,
         document_metadata={
             "filename": file.filename,
             "page_count": parser.page_count,
@@ -315,7 +343,7 @@ async def get_htoc_tree(
     session_service: SessionService = Depends(get_session_service),
 ):
     """View the HTOC tree for a document. Returns status if still building."""
-    session = await session_service.get(session_id)
+    session = await session_service.get_for_user(session_id, current_user)
     if not session:
         raise HTTPException(404, "Session expired or not found")
 
@@ -346,7 +374,7 @@ async def get_htoc_status(
     session_service: SessionService = Depends(get_session_service),
 ):
     """Quick poll endpoint for frontend to check if processing is ready."""
-    session = await session_service.get(session_id)
+    session = await session_service.get_for_user(session_id, current_user)
     if not session:
         raise HTTPException(404, "Session expired or not found")
     return {
@@ -357,9 +385,137 @@ async def get_htoc_status(
     }
 
 
-def _count_nodes(node: dict) -> int:
-    """Count total nodes in the HTOC tree."""
+def _count_nodes(node: dict, depth: int = 0, max_depth: int = 50) -> int:
+    """Count total nodes in the HTOC tree (depth-limited to prevent stack overflow)."""
+    if depth >= max_depth:
+        return 1
     count = 1
     for child in node.get("children", []):
-        count += _count_nodes(child)
+        count += _count_nodes(child, depth + 1, max_depth)
     return count
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  IMAGE CAPTURE UPLOAD — stitch photos into PDF, feed into OCR pipeline
+# ──────────────────────────────────────────────────────────────────────
+
+MAX_IMAGES = 15
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
+@router.post("/upload/images", response_model=UploadResponse)
+async def upload_document_images(
+    images: List[UploadFile] = File(...),
+    ocr_language: str = Form(default="en-IN"),
+    current_user: str = Depends(get_current_user),
+    pii_service: PIIAnonymizer = Depends(get_pii_service),
+    session_service: SessionService = Depends(get_session_service),
+    gemini: GeminiClient = Depends(get_gemini_client),
+    htoc_builder: HTOCBuilder = Depends(get_htoc_builder),
+):
+    """Accept 1-15 images, stitch into a PDF, then process as a scanned document."""
+    if len(images) < 1 or len(images) > MAX_IMAGES:
+        raise HTTPException(400, f"Upload between 1 and {MAX_IMAGES} images")
+
+    # Read and validate all images
+    image_data: List[bytes] = []
+    total_size = 0
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+
+    for img in images:
+        if not img.content_type or img.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(400, f"'{img.filename}' is not a supported image (JPEG, PNG, WebP)")
+        data = await img.read()
+        total_size += len(data)
+        if total_size > max_bytes:
+            raise HTTPException(413, f"Total size exceeds {settings.MAX_FILE_SIZE_MB}MB limit")
+        image_data.append(data)
+
+    # Stitch images into a PDF using PyMuPDF
+    pdf_doc = pymupdf.open()
+    for img_bytes in image_data:
+        pix = pymupdf.Pixmap(img_bytes)
+        w, h = pix.width, pix.height
+        pix = None  # free memory
+        page = pdf_doc.new_page(width=w, height=h)
+        page.insert_image(page.rect, stream=img_bytes)
+
+    pdf_content = pdf_doc.tobytes()
+    page_count = len(pdf_doc)
+    pdf_doc.close()
+
+    logger.info("Stitched %d images into %d-page PDF (%d bytes)", len(image_data), page_count, len(pdf_content))
+
+    # Store the stitched PDF for viewing/download (TTL matches session)
+    db = get_database()
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
+
+    # Create session and launch background processing (same as scanned docs)
+    session = await session_service.create(
+        pii_mapping={},
+        anonymized_text="",
+        page_texts=[],
+        htoc_tree=None,
+        htoc_status="processing",
+        user_email=current_user,
+        document_metadata={
+            "filename": f"Captured_{page_count}_pages.pdf",
+            "page_count": page_count,
+            "size_bytes": len(pdf_content),
+            "needs_ocr": True,
+            "source": "image_capture",
+        }
+    )
+
+    # Store stitched PDF for viewing/download
+    await db.document_files.insert_one({
+        "session_id": session.session_id,
+        "pdf_bytes": Binary(pdf_content),
+        "filename": f"Captured_{page_count}_pages.pdf",
+        "expires_at": expires_at,
+    })
+
+    asyncio.create_task(
+        _process_document_background(
+            session.session_id, pdf_content, "application/pdf",
+            "scanned", ocr_language, pii_service, gemini,
+            htoc_builder, session_service, ocr_mode="fast",
+        )
+    )
+
+    return UploadResponse(
+        session_id=session.session_id,
+        filename=f"Captured_{page_count}_pages.pdf",
+        page_count=page_count,
+        detected_pii_count=0,
+        needs_ocr=True,
+        expires_in_seconds=settings.SESSION_TTL_SECONDS,
+        htoc_status="processing",
+    )
+
+
+@router.get("/document/pdf")
+async def get_document_pdf(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    current_user: str = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+):
+    """Serve the stitched PDF for image-captured documents (viewing + download)."""
+    # Verify session ownership
+    session = await session_service.get_for_user(session_id, current_user)
+    if not session:
+        raise HTTPException(404, "Session expired or not found")
+
+    db = get_database()
+    doc = await db.document_files.find_one({"session_id": session_id})
+    if not doc:
+        raise HTTPException(404, "Document PDF not available")
+
+    filename = doc.get("filename", "document.pdf")
+    return Response(
+        content=bytes(doc["pdf_bytes"]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
+    )

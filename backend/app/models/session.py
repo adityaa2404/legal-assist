@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 class Session(BaseModel):
     session_id: str
+    user_email: Optional[str] = None  # Owner — used for session access control
     created_at: datetime
     expires_at: datetime
     pii_mapping: Dict[str, str]

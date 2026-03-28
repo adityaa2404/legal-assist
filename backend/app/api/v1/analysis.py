@@ -102,7 +102,7 @@ async def _get_or_run_analysis(
     tree_search: TreeSearchService = None,
 ) -> dict:
     """Return cached analysis if available, otherwise run Gemini and cache."""
-    session = await session_service.get(session_id)
+    session = await session_service.get(session_id)  # Internal helper — ownership checked by caller
     if not session:
         raise HTTPException(404, "Session expired or not found")
 
@@ -148,7 +148,8 @@ async def _get_or_run_analysis(
     try:
         raw_result = await gemini.analyze_document(document_context, run_type)
     except Exception as e:
-        raise HTTPException(500, f"Analysis failed: {str(e)}")
+        logger.error("Analysis failed for session %s: %s", session_id, e)
+        raise HTTPException(500, "Analysis failed. Please try again.")
 
     result = pii_service.deanonymize_dict(raw_result, session.pii_mapping)
     result = _normalize_result(result)
@@ -175,6 +176,11 @@ async def analyze_document(
     gemini: GeminiClient = Depends(get_gemini_client),
     tree_search: TreeSearchService = Depends(get_tree_search),
 ):
+    # Verify session ownership
+    session_check = await session_service.get_for_user(session_id, current_user)
+    if not session_check:
+        raise HTTPException(404, "Session expired or not found")
+
     result = await _get_or_run_analysis(
         session_id, analysis_type, session_service, pii_service, gemini, tree_search
     )
@@ -209,6 +215,11 @@ async def get_analysis_report(
     gemini: GeminiClient = Depends(get_gemini_client),
     tree_search: TreeSearchService = Depends(get_tree_search),
 ):
+    # Verify session ownership
+    session_check = await session_service.get_for_user(session_id, current_user)
+    if not session_check:
+        raise HTTPException(404, "Session expired or not found")
+
     result = await _get_or_run_analysis(
         session_id, analysis_type, session_service, pii_service, gemini, tree_search
     )
@@ -217,8 +228,8 @@ async def get_analysis_report(
     try:
         pdf_bytes = create_pdf_from_analysis(result, filename, analysis_type)
     except Exception as e:
-        logging.error(f"PDF generation failed: {e}")
-        raise HTTPException(500, f"PDF report generation failed: {str(e)}")
+        logger.error("PDF generation failed: %s", e)
+        raise HTTPException(500, "PDF report generation failed. Please try again.")
 
     return Response(
         content=pdf_bytes,
@@ -245,6 +256,11 @@ async def email_analysis_report(
     if not is_email_configured():
         raise HTTPException(501, "Email is not configured on this server")
 
+    # Verify session ownership
+    session_check = await session_service.get_for_user(session_id, current_user)
+    if not session_check:
+        raise HTTPException(404, "Session expired or not found")
+
     result = await _get_or_run_analysis(
         session_id, body.report_type, session_service, pii_service, gemini, tree_search
     )
@@ -255,7 +271,8 @@ async def email_analysis_report(
     try:
         pdf_bytes = create_pdf_from_analysis(result, filename, body.report_type)
     except Exception as e:
-        raise HTTPException(500, f"PDF generation failed: {str(e)}")
+        logger.error("PDF generation failed: %s", e)
+        raise HTTPException(500, "PDF report generation failed. Please try again.")
 
     try:
         send_report_email(
@@ -269,6 +286,6 @@ async def email_analysis_report(
         raise HTTPException(501, str(e))
     except Exception as e:
         logger.error("Email send failed: %s", e)
-        raise HTTPException(500, f"Failed to send email: {str(e)}")
+        raise HTTPException(500, "Failed to send email. Please try again.")
 
     return {"message": f"Report sent to {body.email}"}

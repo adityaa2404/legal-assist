@@ -27,5 +27,19 @@ export const uploadApi = {
             }
         }
         throw lastError;
-    }
+    },
+
+    uploadImages: async (images: Blob[], ocrLanguage: string = 'en-IN'): Promise<UploadResponse> => {
+        const formData = new FormData();
+        images.forEach((img, i) => {
+            formData.append('images', img, `page_${i + 1}.jpg`);
+        });
+        formData.append('ocr_language', ocrLanguage);
+
+        const { data } = await axiosClient.post<UploadResponse>('/upload/images', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            timeout: 180000, // 3 min — stitching + initial processing
+        });
+        return data;
+    },
 };

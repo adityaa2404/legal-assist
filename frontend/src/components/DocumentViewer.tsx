@@ -8,11 +8,21 @@ const DocumentViewer: React.FC = () => {
     const [collapsed, setCollapsed] = useState(false);
 
     if (!fileUrl) {
+        const isImageCapture = session?.document_metadata?.needs_ocr;
         return (
             <div className="h-full bg-card rounded-xl border border-border flex flex-col items-center justify-center text-muted-foreground p-6 text-center">
                 <Icon name="picture_as_pdf" size="xl" className="opacity-30 mb-3" />
-                <p className="text-sm font-medium mb-1">No PDF available</p>
-                <p className="text-xs">Upload a new document to view it here.</p>
+                {isImageCapture ? (
+                    <>
+                        <p className="text-sm font-medium mb-1">PDF no longer available</p>
+                        <p className="text-xs">Auto-deleted per our zero-retention policy. You can still chat and view the analysis.</p>
+                    </>
+                ) : (
+                    <>
+                        <p className="text-sm font-medium mb-1">No PDF available</p>
+                        <p className="text-xs">Upload a new document to view it here.</p>
+                    </>
+                )}
             </div>
         );
     }

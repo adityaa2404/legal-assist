@@ -42,6 +42,10 @@ async def create_indexes():
         [("user_email", 1), ("created_at", -1)]
     )
 
+    # Document files: TTL auto-delete matching session lifetime
+    await db.document_files.create_index("session_id", unique=True)
+    await db.document_files.create_index("expires_at", expireAfterSeconds=0)
+
     logger.info("MongoDB indexes created/verified")
 
 

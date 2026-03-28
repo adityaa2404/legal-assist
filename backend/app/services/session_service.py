@@ -3,8 +3,11 @@ from app.models.session import Session, SessionCreate, SessionUpdate
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from app.core.config import settings
-from bson import ObjectId
+from pymongo.errors import PyMongoError
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 
 class SessionService:
     def __init__(self):
@@ -20,6 +23,7 @@ class SessionService:
         htoc_tree: dict = None,
         bm25_data: dict = None,
         htoc_status: str = "pending",
+        user_email: str = None,
     ) -> Session:
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -27,6 +31,7 @@ class SessionService:
 
         session_data = {
             "session_id": session_id,
+            "user_email": user_email,
             "created_at": now,
             "expires_at": expires_at,
             "pii_mapping": pii_mapping,
@@ -42,10 +47,23 @@ class SessionService:
         return Session(**session_data)
 
     async def get(self, session_id: str) -> Optional[Session]:
-        result = await self.collection.find_one({"session_id": session_id})
+        try:
+            result = await self.collection.find_one({"session_id": session_id})
+        except PyMongoError as e:
+            logger.error("MongoDB read failed for session %s: %s", session_id, e)
+            return None
         if result:
             return Session(**result)
         return None
+
+    async def get_for_user(self, session_id: str, user_email: str) -> Optional[Session]:
+        """Get session only if it belongs to the given user."""
+        session = await self.get(session_id)
+        if not session:
+            return None
+        if session.user_email and session.user_email != user_email:
+            return None  # Belongs to a different user
+        return session
 
     async def update(self, session_id: str, update_data: SessionUpdate) -> Optional[Session]:
         update_dict = update_data.dict(exclude_unset=True)

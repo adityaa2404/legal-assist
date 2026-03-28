@@ -239,7 +239,16 @@ class GeminiClient:
 
         return '\n'.join(repaired)
 
+    # Max chars for full-text fallback to avoid exceeding Gemini context limits
+    MAX_FULLTEXT_CHARS = 200_000
+
     async def chat(self, anonymized_question: str, anonymized_context: str, chat_history: List[Dict[str, str]]) -> str:
+        # Truncate very large documents to avoid token limit errors
+        context = anonymized_context
+        if len(context) > self.MAX_FULLTEXT_CHARS:
+            context = context[:self.MAX_FULLTEXT_CHARS] + "\n\n[... Document truncated for length ...]"
+            logging.warning("Chat full-text context truncated from %d to %d chars", len(anonymized_context), self.MAX_FULLTEXT_CHARS)
+
         system_context = f"""You are **Legal Assist**, an AI legal document assistant built for Indian users.
 
 YOUR ROLE:
@@ -249,7 +258,7 @@ THE DOCUMENT:
 Below is the full text of the user's uploaded legal document. This is the ONLY source of truth — do not rely on outside legal knowledge, assumptions, or general legal principles.
 
 --- BEGIN DOCUMENT ---
-{anonymized_context}
+{context}
 --- END DOCUMENT ---
 
 HOW TO ANSWER:
@@ -416,32 +425,6 @@ Rules:
         except Exception as e:
             logging.error(f"Gemini Vision OCR failed: {e}")
             return ""
-
-    async def detect_pii(self, text: str) -> List[Dict[str, Any]]:
-        """Identifies PII in text using Gemini."""
-        prompt = f"""
-        Identify all Personally Identifiable Information (PII) in the following legal text.
-        Return a JSON list of objects, where each object has:
-        - entity_type: The type of PII (e.g., PERSON, ORGANIZATION, DATE, PHONE_NUMBER, EMAIL, ADDRESS, AADHAAR, PAN, LOCATION)
-        - text: The exact text from the document representing this PII.
-        
-        Document:
-        {text}
-        """
-
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0,
-                ),
-            )
-            return json.loads(response.text)
-        except Exception as e:
-            logging.error(f"Gemini PII detection failed: {e}")
-            return []
 
     def _get_analysis_prompt(self, analysis_type: str, document: str) -> str:
         if analysis_type == "short":
@@ -642,6 +625,11 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
 
     async def chat_stream(self, anonymized_question: str, anonymized_context: str, chat_history: List[Dict[str, str]]):
         """Streaming version of chat (full-text fallback). Yields text chunks."""
+        # Truncate very large documents to avoid token limit errors
+        context = anonymized_context
+        if len(context) > self.MAX_FULLTEXT_CHARS:
+            context = context[:self.MAX_FULLTEXT_CHARS] + "\n\n[... Document truncated for length ...]"
+
         system_context = f"""You are **Legal Assist**, an AI legal document assistant built for Indian users.
 
 YOUR ROLE:
@@ -651,7 +639,7 @@ THE DOCUMENT:
 Below is the full text of the user's uploaded legal document. This is the ONLY source of truth — do not rely on outside legal knowledge, assumptions, or general legal principles.
 
 --- BEGIN DOCUMENT ---
-{anonymized_context}
+{context}
 --- END DOCUMENT ---
 
 HOW TO ANSWER:

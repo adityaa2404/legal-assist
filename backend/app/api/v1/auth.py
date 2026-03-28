@@ -1,13 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from app.models.user import UserCreate, UserLogin, UserResponse, TokenResponse
 from app.services.auth_service import AuthService
 from app.core.dependencies import get_auth_service, get_current_user
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+_auth_limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter()
 
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
+@_auth_limiter.limit("10/minute")
 async def register(
+    request: Request,
     user_data: UserCreate,
     auth_service: AuthService = Depends(get_auth_service),
 ):
@@ -27,7 +33,9 @@ async def register(
 
 
 @router.post("/login", response_model=TokenResponse)
+@_auth_limiter.limit("15/minute")
 async def login(
+    request: Request,
     credentials: UserLogin,
     auth_service: AuthService = Depends(get_auth_service),
 ):

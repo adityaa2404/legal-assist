@@ -19,35 +19,29 @@ actor "User\n(React SPA)" as User #E0F2FE
 ' ═══════════ API LAYER ═══════════
 rectangle "**API Layer** (FastAPI)" as API #DBEAFE {
     card "POST /auth/register\nPOST /auth/login" as Auth
-    card "POST /documents/upload\nGET  /documents/htoc-status" as Docs
+    card "POST /upload\nGET  /htoc-status" as Docs
     card "POST /analyze\nGET  /analyze/report" as Analysis
     card "POST /chat/stream\nPOST /chat" as Chat
-    card "GET  /history\nPOST /history/restore" as History
+    card "GET  /history" as History
 }
 
 ' ═══════════ SERVICE LAYER ═══════════
 rectangle "**Services**" as SVC #E8F5E9 {
-    card "**AuthService**\nJWT + bcrypt\nPassword validation" as AuthSvc
-    card "**DocumentParser**\nPyMuPDF · DOCX\nEasyOCR (22 langs)" as Parser
-    card "**PIIAnonymizer**\nPresidio (local)\n12 Indian recognizers" as PII
-    card "**SessionService**\nCRUD · caching\nTTL: 2h" as Session
-    card "**HistoryService**\nAnalysis per user\n+ chat data" as HistSvc
-    card "**HTOCBuilder**\nHierarchical TOC\nvia LLM reasoning" as HTOC
+    card "**AuthService**\nJWT + bcrypt" as AuthSvc
+    card "**DocumentParser**\nPyMuPDF · DOCX\nGemini Vision OCR" as Parser
+    card "**PIIAnonymizer**\nPresidio patterns\n16 regex recognizers" as PII
+    card "**SessionService**\nCRUD · TTL: 2h" as Session
+    card "**HistoryService**\nPer-user analysis" as HistSvc
+    card "**HTOCBuilder**\nHierarchical TOC\nvia Gemini" as HTOC
     card "**BM25Search**\nBM25Okapi\n+ HTOC boost" as BM25
     card "**TreeSearch**\nLLM navigates\nHTOC tree" as Tree
-    card "**GeminiClient**\nAnalysis · Chat\n90s timeout · retry" as Gemini
+    card "**GeminiClient**\nAnalysis · Chat\nVision OCR" as Gemini
     card "**ReportGenerator**\nJinja2 → WeasyPrint\n→ PDF" as Report
 }
 
-' ═══════════ DATABASE ═══════════
-rectangle "**MongoDB Atlas** (Singleton Client)" as DB #FEE2E2 {
-    card "**database.py**\nConnection pooling\n(5 min, 50 max)\nIndex creation on startup" as DBCore
-}
-
 ' ═══════════ EXTERNAL ═══════════
-database "MongoDB Atlas\n(users + sessions\n+ analysis_history)" as Mongo #FEE2E2
-cloud "Gemini 2.5 Flash\n(Google AI)" as GeminiAPI #FEE2E2
-component "Presidio + spaCy\nen_core_web_sm (local)" as PresidioLocal #F3E8FF
+database "MongoDB Atlas\n(sessions · users\n· analysis_history)" as Mongo #FEE2E2
+cloud "Gemini API\n(3 keys: Analysis,\nChat/HTOC, Vision)" as GeminiAPI #FEF3C7
 
 ' ═══════════ CONNECTIONS ═══════════
 User --> API : HTTPS + JWT
@@ -67,47 +61,37 @@ Analysis --> Report
 Analysis --> HistSvc : auto-save
 
 History --> HistSvc
-History --> Session : restore for chat
-History --> BM25 : rebuild on restore
 
 Chat --> BM25 : "1. keyword search"
 Chat --> Tree : "2. LLM fallback"
-Chat --> Gemini : "3. chat"
+Chat --> Gemini : "3. generate"
 Chat --> PII
 Chat --> Session
 
 ' Service → External
-AuthSvc --> DBCore
-Session --> DBCore
-HistSvc --> DBCore
-DBCore --> Mongo
+AuthSvc --> Mongo
+Session --> Mongo
+HistSvc --> Mongo
 Gemini --> GeminiAPI
 HTOC --> GeminiAPI
 Tree --> GeminiAPI
-PII --> PresidioLocal
+Parser --> GeminiAPI : Vision OCR\n(scanned docs)
 
 ' ═══════════ NOTES ═══════════
 note bottom of BM25
   **Hybrid RAG Flow:**
-  BM25 (free, <5ms)
+  BM25 keyword (<5ms)
   → low confidence?
   → LLM tree search
-  → Gemini chat
+  → Gemini answer + SSE
 end note
 
 note bottom of PII
-  **Zero external PII**
-  All anonymization local.
+  **Privacy-first pipeline**
+  All regex, no ML models.
   Aadhaar, PAN, GSTIN,
-  Voter ID, Passport, etc.
-end note
-
-note bottom of DBCore
-  **Indexes (auto-created):**
-  users.email (unique)
-  sessions.session_id (unique)
-  sessions.expires_at (TTL)
-  analysis_history.(user_email, created_at)
+  email, phone + 10 more.
+  ~0MB RAM overhead.
 end note
 
 @enduml
