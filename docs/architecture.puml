@@ -1,108 +1,83 @@
-@startuml Legal Assist
+@startuml Legal Assist - Architecture
 
+!theme plain
 skinparam backgroundColor #FEFEFE
 skinparam defaultFontName Inter
-skinparam defaultFontSize 10
+skinparam defaultFontSize 11
 skinparam shadowing false
-skinparam roundCorner 6
-skinparam padding 2
-skinparam packageBorderColor #CBD5E1
-skinparam rectangleBorderColor #94A3B8
-skinparam rectangleBackgroundColor #FFFFFF
-skinparam arrowColor #475569
-skinparam nodesep 20
-skinparam ranksep 25
-skinparam packagePadding 10
+skinparam roundCorner 8
+skinparam nodesep 30
+skinparam ranksep 30
+skinparam padding 4
 
-title **Legal Assist** — System Architecture
+title **Legal Assist** — System Architecture\n
 
-' ═══════════ FRONTEND ═══════════
+' ═══════════ TOP ROW: CLIENT ═══════════
+actor "User" as U #E0F2FE
 
-package "Frontend  «React 19 · Vite · Tailwind · shadcn»" as FE #EFF6FF {
-    rectangle "Landing | Auth | Upload | Chat+Analysis | History" as Pages
-    rectangle "SessionContext «state»" as SC
-    Pages -[hidden]- SC
+rectangle "**React 19 Frontend**" as FE #DBEAFE {
+    card "Upload\nDrag & Drop" as Upload
+    card "Image\nCapture" as Capture
+    card "Dashboard\nChat | Reports" as Dash
 }
 
-' ═══════════ API ═══════════
+' ═══════════ MIDDLE: BACKEND ═══════════
+rectangle "**FastAPI Backend**" as BE #E8F5E9 {
 
-package "API  «FastAPI · /api/v1»" as API #DBEAFE {
-    rectangle "/auth" as AuthR
-    rectangle "/upload\n/htoc-status" as DocR
-    rectangle "/analyze\n/report" as AnaR
-    rectangle "/chat/stream\n«SSE»" as ChatR
-    rectangle "/history" as HistR
-}
+    card "JWT Auth\nbcrypt | Rate Limit" as Auth
 
-' ═══════════ SERVICES ═══════════
+    rectangle "OCR Engine" as OCR #F5F5F5 {
+        card "PyMuPDF\n//digital//" as PyMu
+        card "Gemini Vision\n//fast mode//" as GVision #FFF8E1
+        card "EasyOCR\n//secure mode//\n13+ Indian langs" as EasyOCR #C8E6C9
+    }
 
-package "Services" as SVC #DCFCE7 {
-    together {
-        rectangle "**Auth**\nJWT · bcrypt" as AuthS
-        rectangle "**Session**\nMongoDB · TTL 2h\nchat cache" as SS
-        rectangle "**History**\npersist & restore\nanalysis records" as HS
-    }
-    together {
-        rectangle "**DocumentParser**\nPyMuPDF (digital)\nEasyOCR (scanned)\n13 Indian langs" as DocP
-        rectangle "**PIIAnonymizer**\nPresidio · spaCy\n12 Indian recognizers\nreversible mapping" as PII
-    }
-    together {
-        rectangle "**GeminiClient**\ngemini-2.5-flash\nanalysis · chat · JSON\ndual keys · retry" as GC
-        rectangle "**HTOCBuilder**\nhierarchical TOC\nLLM-generated" as HTOC
-    }
-    together {
-        rectangle "**TreeSearch**\nvectorless RAG\nLLM over HTOC" as TS
-        rectangle "**BM25Search**\nkeyword fallback\nOkapi BM25" as BM25
-        rectangle "**ReportGen**\nWeasyPrint · Jinja2\nPDF export" as RG
+    card "**PII Anonymizer**\nPresidio · 16 patterns\nSingle-pass O(n)" as PII #FFEBEE
+
+    rectangle "Retrieval + AI" as RAG #FFFDE7 {
+        card "HTOC\nTree" as HTOC
+        card "BM25\nIndex" as BM25
+        card "Analysis\nClauses · Risks" as Ana
+        card "Chat\nSSE Stream" as Chat
     }
 }
 
-' ═══════════ EXTERNAL ═══════════
+' ═══════════ BOTTOM: EXTERNAL ═══════════
+database "**MongoDB**\nSessions (TTL 2h)\nUsers · History" as DB #FEE2E2
+cloud "**Gemini 2.5 Flash**\n3 API keys" as Gemini #FEF3C7
 
-package "External" as EXT #FEE2E2 {
-    database "**MongoDB Atlas**\nusers · sessions · history" as DB
-    cloud "**Gemini 2.5 Flash**" as GAPI
-}
+' ═══════════ CLEAN CONNECTIONS ═══════════
 
-' ═══════════ FLOWS ═══════════
+U --> FE
 
-Pages --> API
+Upload --> Auth
+Capture --> Auth
+Dash --> Auth
 
-AuthR --> AuthS
-DocR --> DocP
-DocR --> PII
-DocR --> SS
-DocR -[#2563EB]-> HTOC : <color:#2563EB>bg
-DocR -[#2563EB]-> BM25 : <color:#2563EB>bg
+Auth --> OCR : route by\ndoc type
+Auth --> RAG
 
-AnaR --> TS
-AnaR --> GC
-AnaR --> PII
-AnaR --> RG
-AnaR --> HS
+OCR --> PII : extracted text
+PII --> RAG : anonymized text
 
-ChatR --> BM25
-ChatR -[#9333EA]-> TS : <color:#9333EA>fallback
-ChatR --> GC
-ChatR --> PII
+' OCR to Gemini
+GVision --> Gemini : page images
 
-HistR --> HS
-HistR --> SS
+' RAG to externals
+HTOC --> Gemini
+Ana --> Gemini
+Chat --> Gemini
+Chat --> BM25
 
-HTOC --> GC
-TS --> GC
-
-AuthS --> DB
-SS --> DB
-HS --> DB
-GC --> GAPI
+RAG --> DB : cache
+Auth --> DB : sessions
 
 ' ═══════════ LEGEND ═══════════
-
-legend bottom right
-  **Upload:** File → OCR → PII → HTOC + BM25 (bg)
-  **Chat:** Query → BM25 → Tree → Gemini → Stream
-  **Zero retention:** sessions auto-expire (2h TTL)
-endlegend
+legend bottom
+  | Mode | OCR Engine | API Calls | Privacy |
+  | **Digital** | PyMuPDF | None (local) | Text never leaves server |
+  | **Scanned Fast** | Gemini Vision | Yes (batched 5/req) | Images sent to Gemini |
+  | **Scanned Secure** | EasyOCR (local) | None | Nothing leaves server |
+end legend
 
 @enduml

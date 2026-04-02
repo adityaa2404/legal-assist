@@ -22,8 +22,6 @@ A privacy-preserving full-stack platform for automated legal document analysis. 
 
 ## System Architecture
 
-![Architecture Diagram](docs/architecture.png)
-
 ### Processing Pipeline
 
 ```

@@ -1,0 +1,104 @@
+@startuml Legal Assist - User Flow
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Inter
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam ActivityBackgroundColor #DBEAFE
+skinparam ActivityBorderColor #3B82F6
+skinparam ActivityDiamondBackgroundColor #FEF3C7
+skinparam ActivityDiamondBorderColor #F59E0B
+
+title **Legal Assist** — User Flow\n
+
+start
+
+:User opens app;
+
+if (Logged in?) then (no)
+    :Sign up / Login;
+    :JWT token issued;
+else (yes)
+endif
+
+:Upload Page;
+
+if (Has PDF?) then (yes)
+    :Select PDF / DOCX;
+    :Choose doc type\n(Digital / Scanned);
+else (no)
+    :Image Capture Page;
+    :Take photos / Gallery\n(up to 15 images);
+    :Compress images\n(1500px, JPEG 0.8);
+    :Upload to backend;
+    :Backend stitches PDF;
+    :**Download PDF?**;
+    :Continue to processing;
+endif
+
+' ═══════ PROCESSING PIPELINE ═══════
+
+partition "Processing Pipeline" #E8F5E9 {
+    if (Doc type?) then (Digital)
+        :PyMuPDF extracts text;
+        note right: Instant, local\nNo API calls
+    else (Scanned)
+        if (OCR Mode?) then (Fast)
+            :Gemini Vision OCR;
+            note right: API-based\n~2.5s/page
+        else (Secure)
+            :EasyOCR (local);
+            note right: No API calls\n~3.5s/page\n13+ languages
+        endif
+    endif
+
+    :PII Anonymization;
+    note right
+        16 Presidio patterns
+        [PERSON_1], [ORG_1]
+        Single-pass regex
+    end note
+
+    :Build HTOC tree\n(background);
+    :Build BM25 index\n(background);
+}
+
+' ═══════ ANALYSIS ═══════
+
+partition "AI Analysis" #FFF3E0 {
+    :Gemini analyzes\nanonymized text;
+    :Extract clauses\n(ranked by risk);
+    :Calculate risk score\n(0-100);
+    :Deanonymize results;
+}
+
+' ═══════ DASHBOARD ═══════
+
+:Analysis Dashboard;
+
+split
+    :View Risk Report;
+    :High / Medium / Low\nseverity risks;
+split again
+    :Explore Clauses;
+    :Property > Money >\nLegal > Privacy;
+split again
+    :Chat with Document;
+    :Ask questions\nGet cited answers;
+split again
+    :Download Report;
+    :PDF via email;
+end split
+
+if (New document?) then (yes)
+    :Back to Upload;
+else (no)
+    :Session expires\n(2h TTL);
+    :All data auto-deleted;
+endif
+
+stop
+
+@enduml
