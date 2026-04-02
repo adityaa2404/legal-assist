@@ -4,6 +4,8 @@ A privacy-preserving full-stack platform for automated legal document analysis. 
 
 ![Architecture](docs/architecture.png)
 
+![User Flow](docs/user-flow.png)
+
 ---
 
 ## Features
@@ -397,12 +399,6 @@ python -m evaluation.storage_benchmark --pdf evaluation/docs/sliceSFBLoanApplica
 - **Auth rate limiting** — 15/min on login, 10/min on register (brute-force protection)
 - **Streaming safety** — SSE deanonymization buffered to prevent partial PII token leakage
 - **Stuck session recovery** — Sessions in "processing" for >30 minutes auto-marked as failed on startup
-
----
-
-## User Flow
-
-![User Flow](docs/user-flow.png)
 
 ---
 
