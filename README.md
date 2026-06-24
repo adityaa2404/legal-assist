@@ -259,6 +259,59 @@ docker-compose up --build
 
 This starts frontend (port 80), backend (port 8000), and MongoDB (port 27017).
 
+### 5. Split Deployment (HF Spaces + Render Worker + Upstash Redis)
+
+Use this topology when you want Hugging Face Spaces to serve only HTTP API traffic while a separate Render service runs Celery workers.
+
+- Hugging Face Space: FastAPI API only (no Celery worker process)
+- Render Web Service: Celery worker process + tiny health listener
+- Upstash Redis: Celery broker/backend shared by both
+- MongoDB Atlas: unchanged
+
+#### Hugging Face Spaces (API service)
+
+- Build from this repo's `backend/Dockerfile`
+- Container listens on `${PORT:-7860}`
+- Celery dispatch remains active in upload flow (jobs are queued to Redis)
+
+Set these HF secrets:
+
+- `MONGODB_URI`
+- `MONGO_DB_NAME`
+- `GEMINI_API_KEY`
+- `SESSION_SECRET`
+- `JWT_SECRET`
+- `REDIS_URL` (Upstash URL, same exact value as Render)
+- `CORS_ORIGINS` (JSON string, for example `["https://your-frontend.vercel.app"]`)
+
+#### Render (worker service)
+
+- Service type: `Web Service` (free tier)
+- Start command: `python app/worker_entry.py`
+
+Set these Render environment variables:
+
+- `MONGODB_URI`
+- `MONGO_DB_NAME`
+- `GEMINI_API_KEY`
+- `SESSION_SECRET`
+- `JWT_SECRET` (must match HF)
+- `REDIS_URL` (must match HF exactly)
+- `PORT=10000`
+
+`app/worker_entry.py` starts:
+
+- a dummy HTTP health listener (`0.0.0.0:$PORT`) required by Render Web Service checks
+- Celery worker (`celery -A app.worker.celery_app:celery worker --loglevel=info --concurrency=2`) as foreground process
+
+#### Important free-tier behavior
+
+- HF Spaces and Render free tier can sleep when idle.
+- Render does not wake from Redis queue traffic alone.
+- Keep two UptimeRobot monitors:
+      - one for HF API URL
+      - one for Render worker health URL
+
 ---
 
 ## Environment Variables
@@ -274,7 +327,8 @@ This starts frontend (port 80), backend (port 8000), and MongoDB (port 27017).
 | `JWT_SECRET` | No | Auto-generated | JWT signing secret (set for production!) |
 | `SESSION_TTL_SECONDS` | No | `7200` | Session expiry (seconds) |
 | `MAX_FILE_SIZE_MB` | No | `50` | Max upload size |
-| `CORS_ORIGINS` | No | `["http://localhost:5173"]` | Allowed frontend origins |
+| `CORS_ORIGINS` | No | `["http://localhost:5173"]` | Allowed frontend origins (JSON array string recommended in env) |
+| `REDIS_URL` | Yes | — | Redis broker/backend URL (Upstash in split HF + Render deployment) |
 | `SMTP_HOST` | No | — | Email server for report delivery |
 | `RATE_LIMIT_RPM` | No | `300` | API rate limit per minute |
 

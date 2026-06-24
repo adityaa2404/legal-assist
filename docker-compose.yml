@@ -1,13 +1,9 @@
-version: '3.8'
+version: "3.8"
 
 services:
   frontend:
     build:
       context: ./frontend
-      # Pass build args if needed, though they are usually for build time.
-      # Runtime env vars for Nginx or client-side are tricky in Docker.
-      # Vite bakes env vars at build time.
-      # So we must provide VITE_API_BASE_URL during build.
       args:
         VITE_API_BASE_URL: http://localhost:8000/api/v1
     ports:
@@ -20,16 +16,47 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MONGODB_URI=mongodb://mongo:27017
-      - MONGO_DB_NAME=legal-assist
-      # Secrets should be passed via .env file or environment
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - SESSION_SECRET=${SESSION_SECRET}
-      - MAX_FILE_SIZE_MB=20
-      - SESSION_TTL_SECONDS=7200
-      - CORS_ORIGINS=http://localhost,http://localhost:80,https://legal-assist.ai
+      MONGODB_URI: mongodb://mongo:27017
+      MONGO_DB_NAME: legal-assist
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_HTOC_API_KEY: ${GEMINI_HTOC_API_KEY:-}
+      GEMINI_CHAT_API_KEY: ${GEMINI_CHAT_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPEN_AI_API_KEY: ${OPEN_AI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-7200}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-50}
+      CORS_ORIGINS: '["http://localhost","http://localhost:80","http://localhost:5173"]'
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8000
     depends_on:
       - mongo
+      - redis
+
+  worker:
+    build: ./backend
+    command: python app/worker_entry.py
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      MONGO_DB_NAME: legal-assist
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_HTOC_API_KEY: ${GEMINI_HTOC_API_KEY:-}
+      GEMINI_CHAT_API_KEY: ${GEMINI_CHAT_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPEN_AI_API_KEY: ${OPEN_AI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-7200}
+      REDIS_URL: redis://redis:6379/0
+      PORT: 10000
+    depends_on:
+      - mongo
+      - redis
 
   mongo:
     image: mongo:7
@@ -37,9 +64,11 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
-      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS}
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
 
 volumes:
   mongo_data:

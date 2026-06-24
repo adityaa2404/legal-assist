@@ -23,4 +23,11 @@ tiktoken
 numpy
 rank-bm25
 sse-starlette
+celery[redis]
+redis
 dnspython
+easyocr
+# evaluation dependencies
+python-Levenshtein
+rouge-score
+scikit-learn
