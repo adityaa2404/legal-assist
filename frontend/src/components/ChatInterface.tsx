@@ -43,7 +43,11 @@ function buildSuggestions(analysis: ReturnType<typeof useSession>['analysis']): 
     return [...new Set(suggestions)].slice(0, 4);
 }
 
-const ChatInterface: React.FC = () => {
+interface ChatInterfaceProps {
+    onNavigateToPage?: (page: number) => void;
+}
+
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
     const { session, analysis } = useSession();
     const { messages, sendMessage, isLoading, isStreaming, error } = useChat(session?.session_id || null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -187,18 +191,28 @@ const ChatInterface: React.FC = () => {
                                         <span className="typing-cursor" />
                                     )}
 
-                                    {/* Source citations */}
+                                    {/* Source citations — clickable, navigate PDF viewer */}
                                     {msg.source_sections && msg.source_sections.length > 0 && (
                                         <div className="mt-3 pt-3 border-t border-border flex flex-wrap gap-1.5">
                                             {msg.source_sections.map((s, i) => (
-                                                <span
+                                                <button
                                                     key={i}
-                                                    className="inline-flex items-center gap-1 bg-card border border-border text-xs px-2.5 py-1 rounded-full font-mono text-muted-foreground"
+                                                    onClick={() => onNavigateToPage?.(s.page_start)}
+                                                    title={`${s.title} — click to jump to page ${s.page_start}`}
+                                                    className={`inline-flex items-center gap-1 bg-card border border-border text-xs px-2.5 py-1 rounded-full font-mono text-muted-foreground transition-colors ${onNavigateToPage ? 'hover:bg-primary/10 hover:border-primary/40 hover:text-primary cursor-pointer' : 'cursor-default'}`}
                                                 >
                                                     <Icon name="link" size="sm" className="text-xs" />
                                                     {s.title}, p.{s.pages}
-                                                </span>
+                                                </button>
                                             ))}
+                                        </div>
+                                    )}
+
+                                    {/* Low confidence warning (P4) */}
+                                    {msg.retrieval_confidence === 'low' && (
+                                        <div className="mt-2 flex items-center gap-1.5 text-[10px] font-mono text-amber-600 dark:text-amber-400">
+                                            <Icon name="info" size="sm" />
+                                            Answer based on full document — specific section not found
                                         </div>
                                     )}
                                 </div>

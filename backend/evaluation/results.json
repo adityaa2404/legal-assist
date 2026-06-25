@@ -1,6 +1,46 @@
 {
-  "ocr": null,
-  "clauses": null,
-  "rag": null,
-  "latency": null
+  "digital": {
+    "doc_type": "digital",
+    "file": "digital.pdf",
+    "upload": {
+      "session_id": "fc439bc9-3cc4-4a9c-92b7-230e7e674795",
+      "page_count": 7,
+      "pii_count": 11,
+      "size_mb": 14.62,
+      "upload_ms": 3087
+    },
+    "processing": {
+      "status": "building",
+      "wait_ms": 2406
+    },
+    "analysis": {
+      "fresh_ms": 92635,
+      "cached_ms": 3577,
+      "risk_score": 67,
+      "clauses": 48,
+      "risks": 5,
+      "obligations": 6,
+      "missing_clauses": 7,
+      "parties": 3
+    },
+    "chat": {
+      "avg_ms": 14509,
+      "total_sources": 25
+    }
+  },
+  "scanned": {
+    "doc_type": "scanned",
+    "file": "scanned.pdf",
+    "upload": {
+      "session_id": "d20965ea-5829-4ebf-8fac-a7de8f7e0915",
+      "page_count": 10,
+      "pii_count": 0,
+      "size_mb": 14.36,
+      "upload_ms": 3047
+    },
+    "processing": {
+      "status": "timeout",
+      "wait_ms": 305090
+    }
+  }
 }

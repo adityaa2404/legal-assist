@@ -43,7 +43,7 @@ class UserInDB(BaseModel):
 class UserResponse(BaseModel):
     email: str
     full_name: str
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
 
 class TokenResponse(BaseModel):

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(find /d/legal-assist/backend/app/api/v1 -name *.py)",
       "Bash(curl -s https://api.github.com/repos/VectifyAI/PageIndex)",
-      "Bash(curl -s https://raw.githubusercontent.com/VectifyAI/PageIndex/main/README.md)"
+      "Bash(curl -s https://raw.githubusercontent.com/VectifyAI/PageIndex/main/README.md)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''evaluation/ocr_benchmark.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")"
     ]
   }
 }

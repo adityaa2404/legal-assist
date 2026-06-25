@@ -11,9 +11,14 @@ import os
 import uvicorn
 import logging
 
-# Clean logging: only show warnings+ from noisy libs, INFO for our code
+
+def _resolve_log_level() -> int:
+    level_name = os.getenv("LOG_LEVEL", "WARNING").upper()
+    return getattr(logging, level_name, logging.WARNING)
+
+# Production logging: default to warnings/errors only unless LOG_LEVEL says otherwise.
 logging.basicConfig(
-    level=logging.INFO,
+    level=_resolve_log_level(),
     format="%(asctime)s  %(levelname)-5s  %(name)s  %(message)s",
     datefmt="%H:%M:%S",
 )
@@ -93,4 +98,5 @@ async def root():
     return {"message": "Welcome to legal-assist AI API"}
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)

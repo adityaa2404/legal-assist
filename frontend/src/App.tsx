@@ -14,14 +14,23 @@ import HistoryPage from './components/HistoryPage';
 import { useSession } from './hooks/useSession';
 import { useAuth } from './contexts/AuthContext';
 import { useTheme } from './contexts/ThemeContext';
+import { useUser as useClerkUser } from '@clerk/react';
 import Icon from './components/ui/icon';
 import { Logo, LogoIcon } from './components/ui/Logo';
 
 /* ── Route Guards ── */
 
 const AuthRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated } = useAuth();
-  if (!isAuthenticated) return <Navigate to="/auth" replace />;
+  const { isLoaded, isSignedIn } = useClerkUser();
+  const hasLocalToken = !!localStorage.getItem('auth_token');
+
+if (!isLoaded && !hasLocalToken) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <span className="material-symbols-outlined animate-spin text-4xl text-muted-foreground">progress_activity</span>
+    </div>
+  );
+
+  if (!isSignedIn && !hasLocalToken) return <Navigate to="/auth" replace />;
   return <>{children}</>;
 };
 
@@ -56,7 +65,6 @@ const TopBar: React.FC<{ minimal?: boolean }> = ({ minimal }) => {
             {[
               { label: 'Analysis', path: '/app' },
               { label: 'Upload', path: '/upload' },
-              { label: 'Compare', path: '/app/compare' },
               { label: 'Profile', path: '/profile' },
             ].map(link => (
               <Link

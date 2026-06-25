@@ -8,8 +8,19 @@ import Icon from './ui/icon';
 const ChatPage: React.FC = () => {
     const { session, analysis } = useSession();
     const [showMobilePdf, setShowMobilePdf] = useState(false);
+    // Shared page state: lifted up so ChatInterface source badges can navigate the PDF viewer
+    const [currentPage, setCurrentPage] = useState(1);
 
     if (!session || !analysis) return null;
+
+    const pageCount = session.document_metadata.page_count || 0;
+
+    const navigateToPage = (page: number) => {
+        const clamped = Math.max(1, Math.min(pageCount || page, page));
+        setCurrentPage(clamped);
+        // On mobile, auto-open PDF when navigating
+        setShowMobilePdf(true);
+    };
 
     return (
         <div className="flex flex-col h-full overflow-hidden animate-fade-in">
@@ -47,11 +58,11 @@ const ChatPage: React.FC = () => {
                 <div className="h-full flex gap-3 max-w-7xl mx-auto">
                     {/* Document viewer — always visible on md+ */}
                     <div className="hidden md:block md:w-1/2 h-full">
-                        <DocumentViewer />
+                        <DocumentViewer currentPage={currentPage} onPageChange={setCurrentPage} />
                     </div>
                     {/* Chat — takes remaining space */}
                     <div className="flex-1 min-w-0 h-full">
-                        <ChatInterface />
+                        <ChatInterface onNavigateToPage={navigateToPage} />
                     </div>
                 </div>
 
@@ -72,7 +83,7 @@ const ChatPage: React.FC = () => {
                             </button>
                         </div>
                         <div className="flex-1 min-h-0 p-2">
-                            <DocumentViewer />
+                            <DocumentViewer currentPage={currentPage} onPageChange={setCurrentPage} />
                         </div>
                     </div>
                 )}

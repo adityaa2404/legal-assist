@@ -35,7 +35,7 @@ class HistoryService:
             "pii_mapping": pii_mapping or {},
         }
         await self.collection.insert_one(record)
-        logger.info(f"Saved analysis history for {user_email}: {record['filename']}")
+        logger.debug("Saved analysis history for %s: %s", user_email, record["filename"])
 
     async def get_user_history(self, user_email: str, limit: int = 20, skip: int = 0) -> list:
         """Get user's analysis history (list view — no heavy fields)."""

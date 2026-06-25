@@ -10,6 +10,7 @@ import {
     DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel,
 } from './ui/dropdown-menu';
 import axiosClient from '@/api/axiosClient';
+import { analysisApi } from '@/api/analysisApi';
 
 interface ProcessingStats {
     totalTimeMs: number;
@@ -25,8 +26,9 @@ function formatStatTime(ms: number): string {
 }
 
 const AnalysisDashboard: React.FC = () => {
-    const { analysis, session } = useSession();
+    const { analysis, session, setAnalysis } = useSession();
     const [downloading, setDownloading] = React.useState(false);
+    const [reanalyzing, setReanalyzing] = React.useState(false);
     const [emailModalOpen, setEmailModalOpen] = React.useState(false);
     const [emailAddress, setEmailAddress] = React.useState('');
     const [emailStatus, setEmailStatus] = React.useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
@@ -47,6 +49,19 @@ const AnalysisDashboard: React.FC = () => {
         const id = setTimeout(() => setProcessingStats(null), 12000);
         return () => clearTimeout(id);
     }, [processingStats]);
+
+    const handleReanalyze = async () => {
+        if (!session) return;
+        setReanalyzing(true);
+        try {
+            const fresh = await analysisApi.analyze(session.session_id, 'full', true);
+            setAnalysis(fresh);
+        } catch (err) {
+            console.error('Re-analysis failed:', err);
+        } finally {
+            setReanalyzing(false);
+        }
+    };
 
     const handleDownloadReport = async (reportType: 'full' | 'short') => {
         if (!session) return;
@@ -206,6 +221,16 @@ const AnalysisDashboard: React.FC = () => {
                     </div>
                 </div>
 
+                <div className="flex items-center gap-2">
+                <button
+                    onClick={handleReanalyze}
+                    disabled={reanalyzing}
+                    title="Re-run analysis (bypasses cache)"
+                    className="bg-muted border border-border text-foreground px-3 py-2 rounded-md text-sm font-bold flex items-center gap-1.5 hover:bg-muted/80 transition-all disabled:opacity-50"
+                >
+                    <span className={`material-symbols-outlined text-[16px]${reanalyzing ? ' animate-spin' : ''}`}>refresh</span>
+                    {reanalyzing ? 'Re-analyzing...' : 'Re-analyze'}
+                </button>
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                         <button
@@ -238,10 +263,36 @@ const AnalysisDashboard: React.FC = () => {
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
+                </div>
             </div>
 
             {/* Disclaimer */}
             <DisclaimerBanner />
+
+            {/* Parties — top of page for quick context */}
+            {analysis.parties.length > 0 && (
+                <div>
+                    <h3 className="font-bold text-muted-foreground uppercase tracking-widest text-xs mb-4 flex items-center gap-2">
+                        <Icon name="groups" size="sm" />
+                        Parties Involved
+                    </h3>
+                    <div className="flex flex-wrap gap-3">
+                        {analysis.parties.map((p: any, i: number) => (
+                            <div key={i} className="bg-card border border-border rounded-lg px-4 py-3 flex items-center space-x-3">
+                                <div className="w-8 h-8 bg-secondary-container rounded-full flex items-center justify-center">
+                                    <Icon name="person" size="sm" className="text-foreground" />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm">{typeof p === 'string' ? p : p.name}</p>
+                                    {typeof p !== 'string' && p.role && (
+                                        <p className="text-[11px] text-muted-foreground">{p.role}</p>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Hero: Risk Score + Summary bento */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
@@ -267,9 +318,10 @@ const AnalysisDashboard: React.FC = () => {
                         </div>
                     </div>
                     <p className="mt-4 text-xs font-bold text-center" style={{ color: riskColor }}>
-                        {score >= 70 ? 'High risk: immediate attention needed.' :
-                         score >= 40 ? 'Caution: moderate risks identified.' :
-                         'Low risk: well-drafted document.'}
+                        {score >= 70 ? 'High risk — immediate attention needed.' :
+                         score >= 40 ? 'Caution — moderate risks identified.' :
+                         highCount > 0 ? `Low score but ${highCount} high severity risk${highCount > 1 ? 's' : ''} found — review carefully.` :
+                         'Low risk — well-drafted document.'}
                     </p>
                 </div>
 
@@ -354,31 +406,6 @@ const AnalysisDashboard: React.FC = () => {
                             <div key={i} className="flex items-center space-x-3 text-sm font-medium text-on-surface-variant">
                                 <Icon name="cancel" size="sm" className="text-error" />
                                 <span>{clause}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Parties */}
-            {analysis.parties.length > 0 && (
-                <div>
-                    <h3 className="font-bold text-muted-foreground uppercase tracking-widest text-xs mb-4 flex items-center gap-2">
-                        <Icon name="groups" size="sm" />
-                        Parties Involved
-                    </h3>
-                    <div className="flex flex-wrap gap-3">
-                        {analysis.parties.map((p: any, i: number) => (
-                            <div key={i} className="bg-card border border-border rounded-lg px-4 py-3 flex items-center space-x-3">
-                                <div className="w-8 h-8 bg-secondary-container rounded-full flex items-center justify-center">
-                                    <Icon name="person" size="sm" className="text-foreground" />
-                                </div>
-                                <div>
-                                    <p className="font-bold text-sm">{typeof p === 'string' ? p : p.name}</p>
-                                    {typeof p !== 'string' && p.role && (
-                                        <p className="text-[11px] text-muted-foreground">{p.role}</p>
-                                    )}
-                                </div>
                             </div>
                         ))}
                     </div>

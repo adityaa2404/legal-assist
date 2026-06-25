@@ -10,6 +10,7 @@ class Clause(BaseModel):
     clause_text: str
     plain_english: str
     importance: str
+    risk_rank: Optional[int] = None
 
 class Risk(BaseModel):
     risk_title: str

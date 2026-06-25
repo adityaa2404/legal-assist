@@ -122,14 +122,20 @@ class PIIAnonymizer:
 
     def _anonymize_with_presidio(self, text: str) -> Tuple[str, Dict[str, str]]:
         """Run all pattern recognizers on text, then build token mapping."""
+        import time as _time
         # Collect detections from all recognizers
         all_results: List[RecognizerResult] = []
         for recognizer in _recognizers:
             try:
+                t0 = _time.perf_counter()
                 results = recognizer.analyze(
                     text=text,
                     entities=[recognizer.supported_entities[0]],
                 )
+                elapsed = _time.perf_counter() - t0
+                if elapsed > 1.0:
+                    logger.warning("SLOW recognizer %s: %.1fs on %d chars",
+                                   recognizer.supported_entities[0], elapsed, len(text))
                 all_results.extend(results)
             except Exception as e:
                 logger.debug("Recognizer %s failed: %s", recognizer.supported_entities[0], e)

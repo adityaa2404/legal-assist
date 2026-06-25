@@ -15,12 +15,49 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+
+async def _embed_htoc_nodes(tree: Dict[str, Any]) -> None:
+    """
+    Walk the HTOC tree and embed each node's title+summary in-place.
+    Used by BM25SearchService for semantic boosting instead of token overlap.
+    Runs after tree is built. Failure is non-fatal — nodes just lack embeddings.
+    """
+    try:
+        from app.services.embedding_service import embed_texts
+
+        # Collect all nodes in order
+        nodes: List[Dict[str, Any]] = []
+
+        def _collect(node: Dict[str, Any]):
+            nodes.append(node)
+            for child in node.get("children", []):
+                _collect(child)
+
+        _collect(tree)
+
+        # Build texts to embed: title + summary
+        texts = [f"{n.get('title', '')} {n.get('summary', '')}".strip() for n in nodes]
+        embeddings = await embed_texts(texts)
+
+        for node, emb in zip(nodes, embeddings):
+            if emb is not None:
+                node["embedding"] = emb
+
+        embedded_count = sum(1 for e in embeddings if e is not None)
+        logger.info("Embedded %d/%d HTOC nodes", embedded_count, len(nodes))
+    except Exception as e:
+        logger.warning("HTOC node embedding failed (non-fatal, will use token overlap boost): %s", e)
+
 # Max pages to include in a single HTOC building prompt
 MAX_PAGES_PER_PROMPT = 100
 # Max chars per page preview in the prompt
 MAX_CHARS_PER_PAGE_PREVIEW = 600
 # Skip HTOC for very small docs (BM25 alone is good enough)
 SKIP_HTOC_THRESHOLD = 3
+
+# Groq free tier: 12k TPM limit — use smaller chunks and shorter previews
+GROQ_MAX_PAGES_PER_PROMPT = 40
+GROQ_MAX_CHARS_PER_PAGE_PREVIEW = 200
 
 
 class HTOCBuilder:
@@ -29,13 +66,14 @@ class HTOCBuilder:
     Uses LLM reasoning to understand document structure without vector embeddings.
     """
 
-    async def build_tree(self, page_texts: List[str], gemini_client) -> Dict[str, Any]:
+    async def build_tree(self, page_texts: List[str], gemini_client, ai_provider: str = "gemini") -> Dict[str, Any]:
         """
         Build an HTOC tree from anonymized page texts.
 
         Args:
             page_texts: List of text content per page (anonymized)
             gemini_client: GeminiClient instance for LLM calls
+            ai_provider: 'gemini' or 'groq' — controls which backend is used
 
         Returns:
             HTOC tree as a dictionary
@@ -51,16 +89,22 @@ class HTOCBuilder:
             logger.info(f"Small doc ({num_pages} pages), using simple tree (no LLM call)")
             return self._simple_tree(page_texts)
 
-        if num_pages <= MAX_PAGES_PER_PROMPT:
-            return await self._build_tree_single(page_texts, gemini_client)
+        max_per_prompt = GROQ_MAX_PAGES_PER_PROMPT if ai_provider == "groq" else MAX_PAGES_PER_PROMPT
+        if num_pages <= max_per_prompt:
+            tree = await self._build_tree_single(page_texts, gemini_client, ai_provider)
         else:
-            return await self._build_tree_chunked(page_texts, gemini_client)
+            tree = await self._build_tree_chunked(page_texts, gemini_client, ai_provider)
+
+        # Embed node summaries for semantic boost in BM25 (non-fatal if embedding API is unavailable)
+        await _embed_htoc_nodes(tree)
+        return tree
 
     async def _build_tree_single(
-        self, page_texts: List[str], gemini_client
+        self, page_texts: List[str], gemini_client, ai_provider: str = "gemini"
     ) -> Dict[str, Any]:
         """Build tree from all pages in a single LLM call."""
-        page_previews = self._create_page_previews(page_texts)
+        max_chars = GROQ_MAX_CHARS_PER_PAGE_PREVIEW if ai_provider == "groq" else MAX_CHARS_PER_PAGE_PREVIEW
+        page_previews = self._create_page_previews(page_texts, max_chars)
 
         prompt = f"""You are a legal document structure analyzer. Analyze the following document pages and build a hierarchical table of contents (HTOC) that captures the document's logical structure.
 
@@ -107,17 +151,17 @@ RULES:
 - RETURN ONLY VALID JSON, no markdown formatting"""
 
         try:
-            tree = await gemini_client.generate_json(prompt)
+            tree = await gemini_client.generate_json(prompt, provider=ai_provider)
             return self._validate_tree(tree, len(page_texts))
         except Exception as e:
             logger.error(f"HTOC building failed: {e}")
             return self._fallback_tree(page_texts)
 
     async def _build_tree_chunked(
-        self, page_texts: List[str], gemini_client
+        self, page_texts: List[str], gemini_client, ai_provider: str = "gemini"
     ) -> Dict[str, Any]:
         """Build tree for large documents by processing chunks with controlled concurrency."""
-        chunk_size = MAX_PAGES_PER_PROMPT
+        chunk_size = GROQ_MAX_PAGES_PER_PROMPT if ai_provider == "groq" else MAX_PAGES_PER_PROMPT
 
         # Limit concurrent Gemini calls to avoid rate limits
         # Free tier: 5 req/min → allow 2 concurrent to leave room for other calls
@@ -127,7 +171,7 @@ RULES:
             async with semaphore:
                 end = min(start + chunk_size, len(page_texts))
                 chunk = page_texts[start:end]
-                sub_tree = await self._build_tree_single(chunk, gemini_client)
+                sub_tree = await self._build_tree_single(chunk, gemini_client, ai_provider)
                 self._offset_pages(sub_tree, start)
                 return sub_tree
 
@@ -154,7 +198,7 @@ RULES:
         # Merge sub-trees: ask LLM to create a unified structure
         merge_prompt = self._build_merge_prompt(sub_trees, len(page_texts))
         try:
-            merged = await gemini_client.generate_json(merge_prompt)
+            merged = await gemini_client.generate_json(merge_prompt, provider=ai_provider)
             return self._validate_tree(merged, len(page_texts))
         except Exception as e:
             logger.warning(f"Tree merge failed, using flat merge: {e}")
@@ -219,12 +263,12 @@ RULES:
             ]
         return result
 
-    def _create_page_previews(self, page_texts: List[str]) -> str:
+    def _create_page_previews(self, page_texts: List[str], max_chars: int = MAX_CHARS_PER_PAGE_PREVIEW) -> str:
         """Create truncated page previews for the prompt."""
         previews = []
         for i, text in enumerate(page_texts):
-            preview = text[:MAX_CHARS_PER_PAGE_PREVIEW].strip()
-            if len(text) > MAX_CHARS_PER_PAGE_PREVIEW:
+            preview = text[:max_chars].strip()
+            if len(text) > max_chars:
                 preview += "..."
             previews.append(f"--- Page {i} ---\n{preview}")
         return "\n\n".join(previews)

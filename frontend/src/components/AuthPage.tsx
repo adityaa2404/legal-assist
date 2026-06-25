@@ -1,57 +1,16 @@
 import React, { useState } from 'react';
-import { authApi } from '@/api/authApi';
-import { useAuth } from '@/contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { SignIn, SignUp } from '@clerk/react';
 import Icon from './ui/icon';
 
 const AuthPage: React.FC = () => {
-    const { login } = useAuth();
-    const navigate = useNavigate();
-    const [isLogin, setIsLogin] = useState(true);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [fullName, setFullName] = useState('');
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsLoading(true);
-        setError(null);
-
-        try {
-            if (isLogin) {
-                const res = await authApi.login({ email, password });
-                login(res.access_token, res.user);
-            } else {
-                if (!fullName.trim()) {
-                    setError('Full name is required');
-                    setIsLoading(false);
-                    return;
-                }
-                const res = await authApi.register({ email, password, full_name: fullName });
-                login(res.access_token, res.user);
-            }
-            navigate('/upload');
-        } catch (err: any) {
-            const detail = err.response?.data?.detail;
-            if (Array.isArray(detail)) {
-                setError(detail.map((d: any) => d.msg).join('. ').replace(/^Value error, /g, ''));
-            } else {
-                setError(detail || err.message || 'Authentication failed');
-            }
-        } finally {
-            setIsLoading(false);
-        }
-    };
+    const [mode, setMode] = useState<'signin' | 'signup'>('signin');
 
     return (
         <div className="flex-grow flex flex-col items-center justify-center px-4 py-12">
             <div className="w-full max-w-md space-y-8">
                 {/* Branding */}
                 <div className="text-center space-y-4">
-                    <div className="inline-flex items-center justify-center w-20 h-20 bg-primary-container text-on-primary rounded-xl mb-2">
+                    <div className="inline-flex items-center justify-center w-20 h-20 bg-primary-container text-primary-foreground rounded-xl mb-2">
                         <Icon name="shield" size="xl" filled />
                     </div>
                     <h1 className="font-headline font-extrabold text-4xl tracking-tight text-primary">
@@ -62,128 +21,37 @@ const AuthPage: React.FC = () => {
                     </p>
                 </div>
 
-                {/* Auth Card */}
-                <div className="bg-surface-container-lowest p-8 rounded-xl shadow-[0_40px_60px_-15px_rgba(0,0,0,0.04)] relative">
-                    {/* Zero Retention Seal */}
-                    <div className="absolute -top-4 right-8">
-                        <div className="glass-badge px-4 py-1.5 rounded-full flex items-center gap-2">
-                            <Icon name="verified_user" size="sm" filled className="text-primary" />
-                            <span className="font-bold text-[10px] uppercase tracking-widest text-primary">
-                                Zero Retention Guarantee
-                            </span>
-                        </div>
-                    </div>
+                {/* Tab toggle */}
+                <div className="flex space-x-8 border-b border-outline-variant/20">
+                    <button
+                        onClick={() => setMode('signin')}
+                        className={`pb-4 text-sm font-bold transition-all ${
+                            mode === 'signin'
+                                ? 'border-b-2 border-primary text-primary'
+                                : 'text-outline hover:text-primary'
+                        }`}
+                    >
+                        Login
+                    </button>
+                    <button
+                        onClick={() => setMode('signup')}
+                        className={`pb-4 text-sm font-bold transition-all ${
+                            mode === 'signup'
+                                ? 'border-b-2 border-primary text-primary'
+                                : 'text-outline hover:text-primary'
+                        }`}
+                    >
+                        Register
+                    </button>
+                </div>
 
-                    {/* Tabs */}
-                    <div className="flex space-x-8 mb-8 border-b border-outline-variant/20">
-                        <button
-                            onClick={() => { setIsLogin(true); setError(null); }}
-                            className={`pb-4 text-sm font-bold transition-all ${
-                                isLogin ? 'border-b-2 border-primary text-primary' : 'text-outline hover:text-primary'
-                            }`}
-                        >
-                            Login
-                        </button>
-                        <button
-                            onClick={() => { setIsLogin(false); setError(null); }}
-                            className={`pb-4 text-sm font-medium transition-all ${
-                                !isLogin ? 'border-b-2 border-primary text-primary font-bold' : 'text-outline hover:text-primary'
-                            }`}
-                        >
-                            Register
-                        </button>
-                    </div>
-
-                    {/* Form */}
-                    <form onSubmit={handleSubmit} className="space-y-6">
-                        {!isLogin && (
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold uppercase tracking-tighter text-secondary">
-                                    Full Name
-                                </label>
-                                <div className="relative group">
-                                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg transition-colors group-focus-within:text-primary">
-                                        person
-                                    </span>
-                                    <input
-                                        type="text"
-                                        value={fullName}
-                                        onChange={(e) => setFullName(e.target.value)}
-                                        placeholder="Jane Doe"
-                                        className="w-full pl-10 pr-4 py-3 bg-surface-container-lowest border border-outline-variant/30 rounded-lg focus:ring-0 focus:border-primary focus:bg-surface-container-low transition-all placeholder:text-outline-variant/60 text-sm"
-                                        required={!isLogin}
-                                    />
-                                </div>
-                            </div>
-                        )}
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold uppercase tracking-tighter text-secondary">
-                                Email Address
-                            </label>
-                            <div className="relative group">
-                                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg transition-colors group-focus-within:text-primary">
-                                    mail
-                                </span>
-                                <input
-                                    type="email"
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
-                                    placeholder="name@firm.com"
-                                    className="w-full pl-10 pr-4 py-3 bg-surface-container-lowest border border-outline-variant/30 rounded-lg focus:ring-0 focus:border-primary focus:bg-surface-container-low transition-all placeholder:text-outline-variant/60 text-sm"
-                                    required
-                                />
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold uppercase tracking-tighter text-secondary">
-                                Private Password
-                            </label>
-                            <div className="relative group">
-                                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg transition-colors group-focus-within:text-primary">
-                                    lock
-                                </span>
-                                <input
-                                    type="password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    placeholder="Min. 8 characters, include a number"
-                                    className="w-full pl-10 pr-4 py-3 bg-surface-container-lowest border border-outline-variant/30 rounded-lg focus:ring-0 focus:border-primary focus:bg-surface-container-low transition-all placeholder:text-outline-variant/60 text-sm"
-                                    required
-                                    minLength={8}
-                                />
-                            </div>
-                        </div>
-
-                        {error && (
-                            <div className="flex items-center gap-2 text-error text-sm bg-error-container/30 px-3 py-2 rounded-md border border-error/20">
-                                <Icon name="error" size="sm" className="text-error shrink-0" />
-                                <span>{error}</span>
-                            </div>
-                        )}
-
-                        <button
-                            type="submit"
-                            disabled={isLoading}
-                            className="w-full py-4 bg-gradient-to-b from-primary to-primary-container text-on-primary font-headline font-bold rounded-lg hover:shadow-lg transition-all active:scale-[0.98] disabled:opacity-60"
-                        >
-                            {isLoading ? (
-                                <span className="flex items-center justify-center gap-2">
-                                    <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                                    {isLogin ? 'Authorizing...' : 'Creating account...'}
-                                </span>
-                            ) : (
-                                isLogin ? 'Authorize Session' : 'Create Account'
-                            )}
-                        </button>
-                    </form>
-
-                    <div className="mt-8 pt-6 border-t border-outline-variant/10 text-center">
-                        <p className="text-xs text-secondary">
-                            By signing in you agree to our terms of use.
-                        </p>
-                    </div>
+                {/* Clerk components */}
+                <div className="flex justify-center">
+                    {mode === 'signin' ? (
+                        <SignIn routing="hash" afterSignInUrl="/upload" />
+                    ) : (
+                        <SignUp routing="hash" afterSignUpUrl="/upload" />
+                    )}
                 </div>
 
                 {/* Trust Indicators */}

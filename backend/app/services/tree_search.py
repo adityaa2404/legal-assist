@@ -33,6 +33,7 @@ class TreeSearchService:
         page_texts: List[str],
         gemini_client,
         max_nodes: int = 5,
+        provider: str = "gemini",
     ) -> Dict[str, Any]:
         """
         Search the HTOC tree for sections relevant to a query.
@@ -80,7 +81,7 @@ SELECTION RULES:
 - RETURN ONLY VALID JSON"""
 
         try:
-            result = await gemini_client.generate_json(prompt)
+            result = await gemini_client.generate_json(prompt, provider=provider)
             selected_ids = result.get("selected_nodes", [])
             reasoning = result.get("reasoning", "")
             confidence = result.get("confidence", "medium")
@@ -117,13 +118,15 @@ SELECTION RULES:
                         f"[Page {page_idx + 1} — {node.get('title', 'Section')}]\n{page_texts[page_idx]}"
                     )
 
-            page_range = (
-                f"{start + 1}-{end + 1}" if start != end else str(start + 1)
-            )
+            page_start_1 = start + 1
+            page_end_1 = min(end, len(page_texts) - 1) + 1  # bounds-checked, 1-indexed
+            page_range = f"{page_start_1}-{page_end_1}" if start != end else str(page_start_1)
             source_sections.append(
                 {
                     "title": node.get("title", f"Section {node_id}"),
                     "pages": page_range,
+                    "page_start": page_start_1,
+                    "page_end": page_end_1,
                     "node_id": node_id,
                 }
             )
@@ -145,8 +148,6 @@ SELECTION RULES:
             "reasoning": reasoning,
         }
 
-    MAX_ANALYSIS_CHARS = 25000  # Cap context to prevent Gemini timeout on large docs
-
     async def search_for_analysis(
         self,
         tree: Dict[str, Any],
@@ -162,12 +163,6 @@ SELECTION RULES:
             Structured text with section headers and page references
         """
         context = self._build_structured_context(tree, page_texts)
-        if len(context) > self.MAX_ANALYSIS_CHARS:
-            truncated = context[:self.MAX_ANALYSIS_CHARS]
-            last_period = max(truncated.rfind('. '), truncated.rfind('.\n'))
-            if last_period > self.MAX_ANALYSIS_CHARS * 0.8:
-                truncated = truncated[:last_period + 1]
-            context = truncated + f"\n\n[Truncated: showing {self.MAX_ANALYSIS_CHARS // 1000}K of {len(context) // 1000}K chars. Key sections above cover the document structure.]"
         return context
 
     def _build_structured_context(

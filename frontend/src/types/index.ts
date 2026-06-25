@@ -28,6 +28,7 @@ export interface Clause {
     clause_text: string;
     plain_english: string;
     importance: "critical" | "important" | "standard";
+    risk_rank?: number; // 1 = highest risk within importance level, higher = lower risk
     rulebook_references?: { text: string; score: number }[];
 }
 
@@ -61,13 +62,16 @@ export interface ChatRequest {
 
 export interface SourceSection {
     title: string;
-    pages: string;
+    pages: string;      // display string e.g. "1-3" or "5"
+    page_start: number; // 1-indexed, for PDF viewer navigation
+    page_end: number;   // 1-indexed, inclusive
     node_id: string;
 }
 
 export interface ChatResponse {
     response: string;
     source_sections?: SourceSection[];
+    retrieval_confidence?: string; // "high" | "medium" | "low"
 }
 
 // Auth types

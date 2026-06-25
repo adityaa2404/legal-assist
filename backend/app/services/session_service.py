@@ -20,9 +20,11 @@ class SessionService:
         anonymized_text: str,
         document_metadata: dict,
         page_texts: list = None,
+        page_chunks: list = None,
         htoc_tree: dict = None,
         bm25_data: dict = None,
         htoc_status: str = "pending",
+        ai_provider: str = "gemini",
         user_email: str = None,
     ) -> Session:
         session_id = str(uuid.uuid4())
@@ -37,9 +39,11 @@ class SessionService:
             "pii_mapping": pii_mapping,
             "anonymized_text": anonymized_text,
             "page_texts": page_texts,
+            "page_chunks": page_chunks,
             "htoc_tree": htoc_tree,
             "bm25_data": bm25_data,
             "htoc_status": htoc_status,
+            "ai_provider": ai_provider,
             "document_metadata": document_metadata,
         }
 
@@ -96,16 +100,19 @@ class SessionService:
         return None
 
     async def update_htoc_and_bm25(
-        self, session_id: str, htoc_tree: dict, bm25_data: dict, status: str = "ready"
+        self, session_id: str, htoc_tree: dict, bm25_data: dict, status: str = "ready", page_chunks: list = None
     ):
         """Update session with completed HTOC tree + BM25 index data."""
+        update_fields = {
+            "htoc_tree": htoc_tree,
+            "bm25_data": bm25_data,
+            "htoc_status": status,
+        }
+        if page_chunks is not None:
+            update_fields["page_chunks"] = page_chunks
         await self.collection.update_one(
             {"session_id": session_id},
-            {"$set": {
-                "htoc_tree": htoc_tree,
-                "bm25_data": bm25_data,
-                "htoc_status": status,
-            }}
+            {"$set": update_fields}
         )
 
     async def set_htoc_status(self, session_id: str, status: str):
@@ -115,13 +122,14 @@ class SessionService:
             {"$set": {"htoc_status": status}}
         )
 
-    async def cache_chat_response(self, session_id: str, query_hash: str, response: str, source_sections: list):
+    async def cache_chat_response(self, session_id: str, query_hash: str, response: str, source_sections: list, retrieval_confidence: str = None):
         """Cache a chat response for repeated questions."""
         await self.collection.update_one(
             {"session_id": session_id},
             {"$set": {f"chat_cache.{query_hash}": {
                 "response": response,
                 "source_sections": source_sections,
+                "retrieval_confidence": retrieval_confidence,
             }}}
         )
 

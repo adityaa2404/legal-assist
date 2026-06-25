@@ -100,6 +100,7 @@ async def _get_or_run_analysis(
     pii_service: PIIAnonymizer,
     gemini: GeminiClient,
     tree_search: TreeSearchService = None,
+    force: bool = False,
 ) -> dict:
     """Return cached analysis if available, otherwise run Gemini and cache."""
     session = await session_service.get(session_id)  # Internal helper — ownership checked by caller
@@ -113,18 +114,19 @@ async def _get_or_run_analysis(
             raise HTTPException(202, "Document is still being processed. Please wait and try again in a few seconds.")
         raise HTTPException(400, "No document text found in session")
 
-    # For short analysis, try to derive from cached full analysis first (saves 1 Gemini call)
-    if analysis_type == "short":
-        cached_full = await session_service.get_analysis(session_id, "full")
-        if cached_full:
-            short_result = _derive_short_from_full(cached_full)
-            await session_service.save_analysis(session_id, "short", short_result)
-            return short_result
+    if not force:
+        # For short analysis, try to derive from cached full analysis first (saves 1 Gemini call)
+        if analysis_type == "short":
+            cached_full = await session_service.get_analysis(session_id, "full")
+            if cached_full:
+                short_result = _derive_short_from_full(cached_full)
+                await session_service.save_analysis(session_id, "short", short_result)
+                return short_result
 
-    # Check cache for this specific analysis type
-    cached = await session_service.get_analysis(session_id, analysis_type)
-    if cached:
-        return cached
+        # Check cache for this specific analysis type
+        cached = await session_service.get_analysis(session_id, analysis_type)
+        if cached:
+            return cached
 
     # Build structured context from HTOC if available
     document_context = anonymized_text
@@ -144,15 +146,31 @@ async def _get_or_run_analysis(
 
     # Always run full analysis — short can be derived from it
     run_type = "full" if analysis_type == "short" else analysis_type
+    ai_provider = getattr(session, "ai_provider", None) or "gemini"
 
     try:
-        raw_result = await gemini.analyze_document(document_context, run_type)
+        raw_result = await gemini.analyze_document(document_context, run_type, provider=ai_provider)
     except Exception as e:
         logger.error("Analysis failed for session %s: %s", session_id, e)
         raise HTTPException(500, "Analysis failed. Please try again.")
 
     result = pii_service.deanonymize_dict(raw_result, session.pii_mapping)
     result = _normalize_result(result)
+
+    # Clamp risk score — model sometimes ignores the formula and returns 0 or out-of-range
+    try:
+        score = int(result.get("overall_risk_score", 0))
+        high_count = sum(1 for r in result.get("risks", []) if r.get("severity") == "high")
+        medium_count = sum(1 for r in result.get("risks", []) if r.get("severity") == "medium")
+        missing_count = len(result.get("missing_clauses", []))
+        # If model returned 0 or implausibly low given actual risks, recalculate floor
+        min_score = min(95, high_count * 6 + medium_count * 3 + missing_count * 2)
+        if score < 5 or (score < min_score and min_score > 10):
+            score = max(score, min_score)
+            logger.warning("Risk score overridden from %s to %s based on risk counts", result.get("overall_risk_score"), score)
+        result["overall_risk_score"] = max(5, min(95, score))
+    except (TypeError, ValueError):
+        result["overall_risk_score"] = 50
 
     # Cache the full analysis
     await session_service.save_analysis(session_id, run_type, result)
@@ -170,6 +188,7 @@ async def _get_or_run_analysis(
 async def analyze_document(
     session_id: str = Header(..., alias="X-Session-ID"),
     analysis_type: str = Query(default='full'),
+    force: bool = Query(default=False),
     current_user: str = Depends(get_current_user),
     session_service: SessionService = Depends(get_session_service),
     pii_service: PIIAnonymizer = Depends(get_pii_service),
@@ -182,7 +201,7 @@ async def analyze_document(
         raise HTTPException(404, "Session expired or not found")
 
     result = await _get_or_run_analysis(
-        session_id, analysis_type, session_service, pii_service, gemini, tree_search
+        session_id, analysis_type, session_service, pii_service, gemini, tree_search, force=force
     )
 
     # Save to user's history (only full analysis, skip if already cached = already saved)

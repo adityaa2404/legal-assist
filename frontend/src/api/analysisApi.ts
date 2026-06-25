@@ -4,12 +4,12 @@ import { AnalysisResponse } from '@/types';
 const MAX_RETRIES = 2;
 
 export const analysisApi = {
-    analyze: async (sessionId: string, type: string = 'full'): Promise<AnalysisResponse> => {
+    analyze: async (sessionId: string, type: string = 'full', force: boolean = false): Promise<AnalysisResponse> => {
         let lastError: any;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 const { data } = await axiosClient.post<AnalysisResponse>(
-                    `/analyze?analysis_type=${type}`,
+                    `/analyze?analysis_type=${type}${force ? '&force=true' : ''}`,
                     {},
                     {
                         headers: {

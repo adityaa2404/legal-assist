@@ -47,3 +47,16 @@ yarn-error.log*
 .Trashes
 ehthumbs.db
 ehthumbs_vista.db
+evaluation
+docs/final-results.md
+docs/project_report.md
+docs/tp.json
+docs/viva_prep.md
+hf-space/
+
+docs/architecture-fast-ocr.png
+docs/architecture-fast-ocr.puml
+docs/architecture-secure-ocr.png
+docs/architecture-secure-ocr.puml
+docs/benchmark_comparison.md
+docs/dfd/

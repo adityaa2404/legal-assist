@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Header, Query
 from fastapi.responses import Response
 from app.services.pii_anonymizer import PIIAnonymizer
-from app.services.document_parser import DocumentParser
+from app.services.document_parser import DocumentParser, _chunk_page_into_paragraphs, CHUNK_OVERLAP_CHARS
 from app.services.session_service import SessionService
 from app.services.gemini_client import GeminiClient
 from app.services.htoc_builder import HTOCBuilder
@@ -17,8 +17,10 @@ from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from typing import List, Optional
 import asyncio
+import base64
 import logging
 import pymupdf
+from app.worker.tasks import process_document, build_htoc_bm25
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,17 @@ ALLOWED_TYPES = [
 BACKGROUND_TASK_TIMEOUT = 600  # 10 minutes max for any background pipeline
 
 
+def _build_chunks_from_pages(page_texts: list) -> list:
+    """Build paragraph-level chunks from a list of page texts (post-anonymization)."""
+    chunks = []
+    prev_tail = ""
+    for page_idx, page_text in enumerate(page_texts):
+        page_chunks = _chunk_page_into_paragraphs(page_text, page_idx, prev_page_tail=prev_tail)
+        chunks.extend(page_chunks)
+        prev_tail = page_text[-CHUNK_OVERLAP_CHARS:] if len(page_text) > CHUNK_OVERLAP_CHARS else page_text
+    return chunks
+
+
 async def _process_document_background(
     session_id: str,
     content: bytes,
@@ -59,6 +72,7 @@ async def _process_document_background(
     htoc_builder: HTOCBuilder,
     session_service: SessionService,
     ocr_mode: str = "fast",
+    ai_provider: str = "gemini",
 ):
     """
     Background task for scanned docs: OCR → PII → HTOC + BM25.
@@ -68,7 +82,7 @@ async def _process_document_background(
         await asyncio.wait_for(
             _process_document_inner(
                 session_id, content, content_type, doc_type, ocr_language,
-                pii_service, gemini, htoc_builder, session_service, ocr_mode,
+                pii_service, gemini, htoc_builder, session_service, ocr_mode, ai_provider,
             ),
             timeout=BACKGROUND_TASK_TIMEOUT,
         )
@@ -82,7 +96,7 @@ async def _process_document_background(
 
 async def _process_document_inner(
     session_id, content, content_type, doc_type, ocr_language,
-    pii_service, gemini, htoc_builder, session_service, ocr_mode,
+    pii_service, gemini, htoc_builder, session_service, ocr_mode, ai_provider="gemini",
 ):
     await session_service.set_htoc_status(session_id, "processing")
 
@@ -102,21 +116,33 @@ async def _process_document_inner(
     anonymized_pages = anonymized_joined.split(PAGE_SEPARATOR)
     anonymized_text = "\n\n".join(anonymized_pages)
 
-    # Step 3: Update session with extracted text + PII mapping
+    # Guard: page_texts length must match page_count (PAGE_SEPARATOR could appear in content)
+    if len(anonymized_pages) != parser.page_count:
+        logger.warning(
+            "page_texts length (%d) != page_count (%d) for session %s — truncating to page_count",
+            len(anonymized_pages), parser.page_count, session_id,
+        )
+        anonymized_pages = anonymized_pages[:parser.page_count]
+
+    # Build paragraph-level chunks from anonymized page texts
+    page_chunks = _build_chunks_from_pages(anonymized_pages)
+
+    # Step 3: Update session with extracted text + PII mapping + chunks
     await session_service.collection.update_one(
         {"session_id": session_id},
         {"$set": {
             "anonymized_text": anonymized_text,
             "page_texts": anonymized_pages,
+            "page_chunks": page_chunks,
             "pii_mapping": pii_mapping,
             "htoc_status": "building",
             "document_metadata.page_count": parser.page_count,
         }}
     )
-    logger.info("OCR + PII done for session %s, %d pages", session_id, len(anonymized_pages))
+    logger.info("OCR + PII done for session %s, %d pages, %d chunks", session_id, len(anonymized_pages), len(page_chunks))
 
     # Step 4: Build HTOC + BM25
-    await _build_htoc_and_bm25(session_id, anonymized_pages, gemini, htoc_builder, session_service)
+    await _build_htoc_and_bm25(session_id, anonymized_pages, gemini, htoc_builder, session_service, ai_provider)
 
 
 async def _build_htoc_and_bm25(
@@ -125,22 +151,28 @@ async def _build_htoc_and_bm25(
     gemini: GeminiClient,
     htoc_builder: HTOCBuilder,
     session_service: SessionService,
+    ai_provider: str = "gemini",
+    page_chunks: list = None,
 ):
     """Build HTOC tree + BM25 index, then update session."""
+    # Build chunks if not provided (small-doc inline path)
+    if page_chunks is None:
+        page_chunks = _build_chunks_from_pages(anonymized_pages)
+
     try:
         # Build HTOC tree (parallel chunk building inside)
-        htoc_tree = await htoc_builder.build_tree(anonymized_pages, gemini)
+        htoc_tree = await htoc_builder.build_tree(anonymized_pages, gemini, ai_provider=ai_provider)
         node_count = _count_nodes(htoc_tree)
         logger.info(f"HTOC tree built with {node_count} sections for session {session_id}")
 
-        # Build BM25 index from pages + HTOC metadata
+        # Build BM25 index from chunks + HTOC metadata
         bm25 = BM25SearchService()
-        bm25.build_index(anonymized_pages, htoc_tree)
+        bm25.build_index(anonymized_pages, htoc_tree, page_chunks=page_chunks)
         bm25_data = bm25.get_serializable_data()
 
-        # Save both to session
+        # Save both to session (also persist chunks if not already saved)
         await session_service.update_htoc_and_bm25(
-            session_id, htoc_tree, bm25_data, status="ready"
+            session_id, htoc_tree, bm25_data, status="ready", page_chunks=page_chunks
         )
         logger.info(f"HTOC + BM25 ready for session {session_id}")
 
@@ -149,10 +181,10 @@ async def _build_htoc_and_bm25(
         # Still build BM25 index without HTOC (keyword-only, still useful)
         try:
             bm25 = BM25SearchService()
-            bm25.build_index(anonymized_pages, None)
+            bm25.build_index(anonymized_pages, None, page_chunks=page_chunks)
             bm25_data = bm25.get_serializable_data()
             await session_service.update_htoc_and_bm25(
-                session_id, None, bm25_data, status="failed"
+                session_id, None, bm25_data, status="failed", page_chunks=page_chunks
             )
             logger.info(f"BM25-only index saved for {session_id} (HTOC failed)")
         except Exception as e2:
@@ -166,6 +198,7 @@ async def upload_document(
     doc_type: str = Form(default="digital"),
     ocr_language: str = Form(default="en-IN"),
     ocr_mode: str = Form(default="fast"),
+    ai_provider: str = Form(default="gemini"),
     current_user: str = Depends(get_current_user),
     pii_service: PIIAnonymizer = Depends(get_pii_service),
     parser: DocumentParser = Depends(get_parser),
@@ -201,6 +234,7 @@ async def upload_document(
             page_texts=[],
             htoc_tree=None,
             htoc_status="processing",  # OCR in progress
+            ai_provider=ai_provider,
             user_email=current_user,
             document_metadata={
                 "filename": file.filename,
@@ -210,13 +244,15 @@ async def upload_document(
             }
         )
 
-        # Launch OCR + PII + HTOC + BM25 all in background
-        asyncio.create_task(
-            _process_document_background(
-                session.session_id, content, file.content_type,
-                doc_type, ocr_language, pii_service, gemini,
-                htoc_builder, session_service, ocr_mode=ocr_mode,
-            )
+        # Enqueue OCR + PII + HTOC + BM25 as Celery task
+        process_document.delay(
+            session_id=session.session_id,
+            content_b64=base64.b64encode(content).decode(),
+            content_type=file.content_type,
+            doc_type=doc_type,
+            ocr_language=ocr_language,
+            ocr_mode=ocr_mode,
+            ai_provider=ai_provider,
         )
 
         return UploadResponse(
@@ -254,6 +290,7 @@ async def upload_document(
             page_texts=[],
             htoc_tree=None,
             htoc_status="processing",
+            ai_provider=ai_provider,
             user_email=current_user,
             document_metadata={
                 "filename": file.filename,
@@ -263,12 +300,14 @@ async def upload_document(
             }
         )
 
-        asyncio.create_task(
-            _process_document_background(
-                session.session_id, content, file.content_type,
-                doc_type, ocr_language, pii_service, gemini,
-                htoc_builder, session_service, ocr_mode=ocr_mode,
-            )
+        process_document.delay(
+            session_id=session.session_id,
+            content_b64=base64.b64encode(content).decode(),
+            content_type=file.content_type,
+            doc_type=doc_type,
+            ocr_language=ocr_language,
+            ocr_mode=ocr_mode,
+            ai_provider=ai_provider,
         )
 
         return UploadResponse(
@@ -287,12 +326,24 @@ async def upload_document(
     anonymized_pages = anonymized_joined.split(PAGE_SEPARATOR)
     anonymized_text = "\n\n".join(anonymized_pages)
 
+    # Guard: page_texts length must match page_count
+    if len(anonymized_pages) != parser.page_count:
+        logger.warning(
+            "page_texts length (%d) != page_count (%d) — truncating",
+            len(anonymized_pages), parser.page_count,
+        )
+        anonymized_pages = anonymized_pages[:parser.page_count]
+
+    page_chunks = _build_chunks_from_pages(anonymized_pages)
+
     session = await session_service.create(
         pii_mapping=pii_mapping,
         anonymized_text=anonymized_text,
         page_texts=anonymized_pages,
+        page_chunks=page_chunks,
         htoc_tree=None,
         htoc_status="building",
+        ai_provider=ai_provider,
         user_email=current_user,
         document_metadata={
             "filename": file.filename,
@@ -302,10 +353,11 @@ async def upload_document(
         }
     )
 
-    asyncio.create_task(
-        _build_htoc_and_bm25(
-            session.session_id, anonymized_pages, gemini, htoc_builder, session_service
-        )
+    build_htoc_bm25.delay(
+        session_id=session.session_id,
+        anonymized_pages=anonymized_pages,
+        ai_provider=ai_provider,
+        page_chunks=page_chunks,
     )
 
     return UploadResponse(
@@ -475,12 +527,14 @@ async def upload_document_images(
         "expires_at": expires_at,
     })
 
-    asyncio.create_task(
-        _process_document_background(
-            session.session_id, pdf_content, "application/pdf",
-            "scanned", ocr_language, pii_service, gemini,
-            htoc_builder, session_service, ocr_mode="fast",
-        )
+    process_document.delay(
+        session_id=session.session_id,
+        content_b64=base64.b64encode(pdf_content).decode(),
+        content_type="application/pdf",
+        doc_type="scanned",
+        ocr_language=ocr_language,
+        ocr_mode="fast",
+        ai_provider="gemini",
     )
 
     return UploadResponse(

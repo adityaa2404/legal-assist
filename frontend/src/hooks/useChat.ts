@@ -6,6 +6,7 @@ const CHAT_KEY = 'lawbuddy_chat_messages';
 
 export interface ChatMessageWithSources extends ChatMessage {
     source_sections?: SourceSection[];
+    retrieval_confidence?: string;
 }
 
 export const useChat = (sessionId: string | null) => {
@@ -66,6 +67,7 @@ export const useChat = (sessionId: string | null) => {
 
             let accumulatedText = '';
             let sourceSections: SourceSection[] | undefined;
+            let retrievalConfidence: string | undefined;
 
             await chatApi.chatStream(
                 sessionId,
@@ -83,14 +85,16 @@ export const useChat = (sessionId: string | null) => {
                             return updated;
                         });
                     },
-                    onSources: (sections: SourceSection[]) => {
+                    onSources: (sections: SourceSection[], confidence?: string) => {
                         sourceSections = sections;
+                        retrievalConfidence = confidence;
                         setMessages(prev => {
                             const updated = [...prev];
                             const lastIdx = updated.length - 1;
                             updated[lastIdx] = {
                                 ...updated[lastIdx],
                                 source_sections: sections,
+                                retrieval_confidence: confidence,
                             };
                             return updated;
                         });
@@ -103,6 +107,7 @@ export const useChat = (sessionId: string | null) => {
                                 ...updated[lastIdx],
                                 content: accumulatedText,
                                 source_sections: sourceSections,
+                                retrieval_confidence: retrievalConfidence,
                             };
                             return updated;
                         });

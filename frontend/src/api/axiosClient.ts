@@ -1,38 +1,43 @@
 import axios from 'axios';
 
-// Get base URL from environment or fallback to localhost
 const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
 
 const axiosClient = axios.create({
     baseURL,
-    headers: {
-        'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
 });
 
-// Attach JWT token to every request if available
-axiosClient.interceptors.request.use((config) => {
-    const token = localStorage.getItem('lawbuddy_token');
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-    }
+// Populated by AuthProvider after mount so the interceptor always has the latest getter
+let _getToken: (() => Promise<string | null>) | null = null;
+
+export function registerTokenGetter(fn: () => Promise<string | null>) {
+    _getToken = fn;
+}
+
+axiosClient.interceptors.request.use(async (config) => {
+    try {
+        let token: string | null = null;
+
+        // 1. Local JWT
+        token = localStorage.getItem('auth_token');
+
+        // 2. Registered getter (AuthContext)
+        if (!token && _getToken) token = await _getToken();
+
+        // 3. Direct window.Clerk fallback
+        if (!token) {
+            const clerk = (window as any).Clerk;
+            if (clerk?.session) token = await clerk.session.getToken();
+        }
+
+        if (token) config.headers.Authorization = `Bearer ${token}`;
+    } catch { /* no session */ }
     return config;
 });
 
-// Redirect to login on 401
 axiosClient.interceptors.response.use(
     (response) => response,
-    (error) => {
-        if (error.response?.status === 401) {
-            localStorage.removeItem('lawbuddy_token');
-            localStorage.removeItem('lawbuddy_user');
-            // Only redirect if not already on auth page
-            if (!window.location.pathname.startsWith('/auth')) {
-                window.location.href = '/auth';
-            }
-        }
-        return Promise.reject(error);
-    }
+    (error) => Promise.reject(error)
 );
 
 export default axiosClient;

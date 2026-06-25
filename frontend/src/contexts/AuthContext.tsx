@@ -1,48 +1,73 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
-import { UserResponse } from '@/types';
+import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { useUser, useClerk } from '@clerk/react';
+import { registerTokenGetter } from '../api/axiosClient';
+
+export interface AuthUser {
+    email: string;
+    full_name: string;
+    created_at?: string;
+}
 
 interface AuthContextType {
-    token: string | null;
-    user: UserResponse | null;
-    login: (token: string, user: UserResponse) => void;
+    user: AuthUser | null;
     logout: () => void;
     isAuthenticated: boolean;
+    isLoading: boolean;
+    getToken: () => Promise<string | null>;
+    setLocalAuth: (token: string, user: AuthUser) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const TOKEN_KEY = 'lawbuddy_token';
-const USER_KEY = 'lawbuddy_user';
-
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
-    const [user, setUser] = useState<UserResponse | null>(() => {
-        const stored = localStorage.getItem(USER_KEY);
+    const { isSignedIn, user: clerkUser, isLoaded: clerkLoaded } = useUser();
+    const { signOut, session } = useClerk();
+
+    const [localToken, setLocalToken] = useState<string | null>(() => localStorage.getItem('auth_token'));
+    const [localUser, setLocalUser] = useState<AuthUser | null>(() => {
+        const stored = localStorage.getItem('auth_user');
         return stored ? JSON.parse(stored) : null;
     });
 
-    const login = (newToken: string, newUser: UserResponse) => {
-        setToken(newToken);
-        setUser(newUser);
-        localStorage.setItem(TOKEN_KEY, newToken);
-        localStorage.setItem(USER_KEY, JSON.stringify(newUser));
+    const setLocalAuth = (token: string, user: AuthUser) => {
+        localStorage.setItem('auth_token', token);
+        localStorage.setItem('auth_user', JSON.stringify(user));
+        setLocalToken(token);
+        setLocalUser(user);
     };
 
     const logout = () => {
-        setToken(null);
-        setUser(null);
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_user');
+        setLocalToken(null);
+        setLocalUser(null);
+        if (isSignedIn) signOut();
     };
 
+    const getToken = async (): Promise<string | null> => {
+        if (localToken) return localToken;
+        // Always read session fresh from closure — Clerk updates it in place
+        const activeSession = (window as any).Clerk?.session;
+        if (activeSession) return activeSession.getToken();
+        return null;
+    };
+
+    // Register synchronously on every render so the interceptor always has latest getter
+    registerTokenGetter(getToken);
+
+    const clerkMappedUser: AuthUser | null = isSignedIn && clerkUser
+        ? {
+            email: clerkUser.primaryEmailAddress?.emailAddress ?? '',
+            full_name: clerkUser.fullName ?? clerkUser.firstName ?? '',
+          }
+        : null;
+
+    const user = localUser ?? clerkMappedUser;
+    const isAuthenticated = !!localToken || !!isSignedIn;
+    const isLoading = !localToken && !clerkLoaded;
+
     return (
-        <AuthContext.Provider value={{
-            token,
-            user,
-            login,
-            logout,
-            isAuthenticated: !!token,
-        }}>
+        <AuthContext.Provider value={{ user, logout, isAuthenticated, isLoading, getToken, setLocalAuth }}>
             {children}
         </AuthContext.Provider>
     );
@@ -50,8 +75,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 export const useAuth = () => {
     const context = useContext(AuthContext);
-    if (context === undefined) {
-        throw new Error('useAuth must be used within an AuthProvider');
-    }
+    if (context === undefined) throw new Error('useAuth must be used within an AuthProvider');
     return context;
 };

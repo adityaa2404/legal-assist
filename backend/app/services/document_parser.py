@@ -49,11 +49,73 @@ MIN_PAGE_VARIANCE = 500     # Skip near-blank pages (low pixel variance = mostly
 DIGITAL_TEXT_THRESHOLD = 50 # If PyMuPDF extracts >50 chars, skip OCR for that page (English only)
 
 
+CHUNK_OVERLAP_CHARS = 200  # overlap between last chunk of page N and first chunk of page N+1
+
+
+def _chunk_page_into_paragraphs(page_text: str, page_idx: int, prev_page_tail: str = "") -> list:
+    """
+    Split a single page's text into paragraph-level chunks with overlap from previous page.
+    Returns list of { chunk_id, page_idx, char_start, char_end, text }.
+    """
+    # Prepend overlap from previous page (so cross-boundary answers are retrievable)
+    effective_text = (prev_page_tail + " " + page_text).strip() if prev_page_tail else page_text
+    overlap_offset = len(prev_page_tail) + 1 if prev_page_tail else 0
+
+    # Split on double newlines (paragraph boundaries), fall back to single newlines
+    raw_paragraphs = [p.strip() for p in effective_text.split("\n\n") if p.strip()]
+    if len(raw_paragraphs) == 1:
+        raw_paragraphs = [p.strip() for p in effective_text.split("\n") if p.strip()]
+
+    chunks = []
+    cursor = 0
+    for para in raw_paragraphs:
+        start = effective_text.find(para, cursor)
+        if start == -1:
+            continue
+        end = start + len(para)
+        cursor = end
+
+        # Adjust char offsets to be relative to original page_text (not including overlap prefix)
+        adjusted_start = max(0, start - overlap_offset)
+        adjusted_end = max(0, end - overlap_offset)
+
+        chunks.append({
+            "chunk_id": f"p{page_idx}_c{len(chunks)}",
+            "page_idx": page_idx,
+            "char_start": adjusted_start,
+            "char_end": adjusted_end,
+            "text": para,
+        })
+
+    # If no paragraphs found (blank/short page), emit one chunk for the whole page
+    if not chunks and page_text.strip():
+        chunks.append({
+            "chunk_id": f"p{page_idx}_c0",
+            "page_idx": page_idx,
+            "char_start": 0,
+            "char_end": len(page_text),
+            "text": page_text.strip(),
+        })
+
+    return chunks
+
+
 class DocumentParser:
     def __init__(self):
         self._page_count = 0
         self._needs_ocr = False
         self._page_texts: list = []
+        self._page_chunks: list = []  # flat list of paragraph-level chunks across all pages
+
+    def _build_page_chunks(self):
+        """Build paragraph-level chunks from self._page_texts after extraction is complete."""
+        self._page_chunks = []
+        prev_tail = ""
+        for page_idx, page_text in enumerate(self._page_texts):
+            chunks = _chunk_page_into_paragraphs(page_text, page_idx, prev_page_tail=prev_tail)
+            self._page_chunks.extend(chunks)
+            # Tail for next page overlap: last CHUNK_OVERLAP_CHARS of this page's raw text
+            prev_tail = page_text[-CHUNK_OVERLAP_CHARS:] if len(page_text) > CHUNK_OVERLAP_CHARS else page_text
 
     async def extract_async(self, content: bytes, content_type: str, doc_type: str = "digital", ocr_language: str = "en-IN", ocr_mode: str = "fast", gemini_client=None) -> str:
         """
@@ -118,9 +180,15 @@ class DocumentParser:
         if ocr_tasks:
             BATCH_SIZE = 5  # avoid hammering rate limits
 
+            MAX_CHARS_PER_PAGE = 15000  # a dense legal page is ~3000 chars; beyond this is hallucination
+
             async def _ocr_one(idx: int, img_bytes: bytes) -> tuple:
                 try:
                     text = await gemini_client.ocr_page_image(img_bytes, lang_hint)
+                    if len(text) > MAX_CHARS_PER_PAGE:
+                        logger.warning("OCR page %d returned %d chars (likely hallucinated), truncating to %d",
+                                       idx + 1, len(text), MAX_CHARS_PER_PAGE)
+                        text = text[:MAX_CHARS_PER_PAGE]
                     logger.info("Gemini Vision OCR page %d/%d — %d chars", idx + 1, self._page_count, len(text))
                     return idx, text
                 except Exception as e:
@@ -133,6 +201,9 @@ class DocumentParser:
                 results = await asyncio.gather(*[_ocr_one(idx, img) for idx, img in batch])
                 for idx, text in results:
                     ocr_results[idx] = text
+                # Pause between batches to respect rate limits
+                if batch_start + BATCH_SIZE < len(items):
+                    await asyncio.sleep(2)  # minimal pause, paid tier handles 2000 RPM
 
         # Step 3: Merge in page order
         page_texts = []
@@ -145,12 +216,13 @@ class DocumentParser:
                 page_texts.append("")
 
         self._page_texts = page_texts
+        self._build_page_chunks()
         full_text = "\n\n".join(t for t in page_texts if t)
         if not full_text.strip():
             raise HTTPException(500, "OCR returned no text. The document may be empty or unreadable.")
 
-        logger.info("Gemini Vision OCR done — %d pages (%d digital, %d OCR'd), %d total chars",
-                     self._page_count, len(digital_texts), len(ocr_results), len(full_text))
+        logger.info("Gemini Vision OCR done — %d pages (%d digital, %d OCR'd), %d total chars, %d chunks",
+                     self._page_count, len(digital_texts), len(ocr_results), len(full_text), len(self._page_chunks))
         return full_text
 
     def _extract_pdf_digital(self, content: bytes) -> str:
@@ -163,6 +235,7 @@ class DocumentParser:
                 all_text.append(page_text if page_text else "")
 
         self._page_texts = all_text
+        self._build_page_chunks()
         return "\n\n".join(t for t in all_text if t)
 
     async def _extract_pdf_scanned(self, content: bytes, ocr_language: str = "en-IN") -> str:
@@ -269,11 +342,12 @@ class DocumentParser:
                 page_texts.append("")
 
         self._page_texts = page_texts
+        self._build_page_chunks()
 
         ocr_count = len(pages_needing_ocr)
         total_chars = sum(len(t) for t in page_texts)
-        logger.info("OCR completed — %d pages, %d OCR'd, %d skipped, %d total chars",
-                     self._page_count, ocr_count, len(digital_texts), total_chars)
+        logger.info("OCR completed — %d pages, %d OCR'd, %d skipped, %d total chars, %d chunks",
+                     self._page_count, ocr_count, len(digital_texts), total_chars, len(self._page_chunks))
 
         full_text = "\n\n".join(t for t in page_texts if t)
         if not full_text.strip():
@@ -286,6 +360,7 @@ class DocumentParser:
         paragraphs = [para.text for para in doc.paragraphs]
         self._page_texts = self._chunk_paragraphs(paragraphs, chars_per_page=3000)
         self._page_count = max(len(self._page_texts), 1)
+        self._build_page_chunks()
         return "\n".join(paragraphs)
 
     def _chunk_paragraphs(self, paragraphs: list, chars_per_page: int = 3000) -> list:
@@ -314,3 +389,7 @@ class DocumentParser:
     @property
     def page_texts(self) -> list:
         return self._page_texts
+
+    @property
+    def page_chunks(self) -> list:
+        return self._page_chunks

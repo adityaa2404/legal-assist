@@ -2,10 +2,23 @@ import React, { useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import Icon from './ui/icon';
 
-const DocumentViewer: React.FC = () => {
+interface DocumentViewerProps {
+    currentPage?: number;
+    onPageChange?: (page: number) => void;
+}
+
+const DocumentViewer: React.FC<DocumentViewerProps> = ({ currentPage: externalPage, onPageChange }) => {
     const { fileUrl, session } = useSession();
-    const [currentPage, setCurrentPage] = useState(1);
+    const [internalPage, setInternalPage] = useState(1);
     const [collapsed, setCollapsed] = useState(false);
+
+    // Use external page state when provided (lifted up to ChatPage for cross-component navigation)
+    const currentPage = externalPage ?? internalPage;
+    const setCurrentPage = (updater: number | ((p: number) => number)) => {
+        const next = typeof updater === 'function' ? updater(currentPage) : updater;
+        if (onPageChange) onPageChange(next);
+        else setInternalPage(next);
+    };
 
     if (!fileUrl) {
         const isImageCapture = session?.document_metadata?.needs_ocr;

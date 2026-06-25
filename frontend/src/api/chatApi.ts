@@ -5,7 +5,7 @@ const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/
 
 export interface StreamCallbacks {
     onToken: (text: string) => void;
-    onSources: (sections: SourceSection[]) => void;
+    onSources: (sections: SourceSection[], retrieval_confidence?: string) => void;
     onDone: () => void;
     onError: (error: string) => void;
 }
@@ -88,7 +88,7 @@ export const chatApi = {
                                     callbacks.onToken(parsed.text);
                                     break;
                                 case 'sources':
-                                    callbacks.onSources(parsed.source_sections);
+                                    callbacks.onSources(parsed.source_sections, parsed.retrieval_confidence);
                                     break;
                                 case 'done':
                                     callbacks.onDone();

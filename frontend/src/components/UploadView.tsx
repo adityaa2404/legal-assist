@@ -72,12 +72,14 @@ const UploadView: React.FC = () => {
     const [docType, setDocType] = useState<'digital' | 'scanned'>('digital');
     const [ocrMode, setOcrMode] = useState<'fast' | 'secure'>('fast');
     const [ocrLanguage, setOcrLanguage] = useState('en-IN');
+    const [aiProvider, setAiProvider] = useState<'gemini' | 'groq' | 'openai' | 'claude'>('gemini');
     const [isDragging, setIsDragging] = useState(false);
     const [, setStageIndex] = useState(-1);
     const [now, setNow] = useState(Date.now());
     const [allDone, setAllDone] = useState(false);
     const stageTimesRef = useRef<StageTimer[]>([]);
     const resumedRef = useRef(false);
+    const cancelledRef = useRef(false);
 
     const stages = docType === 'scanned' ? SCANNED_STAGES : DIGITAL_STAGES;
     const isProcessing = isUploading || allDone;
@@ -104,6 +106,16 @@ const UploadView: React.FC = () => {
         setStageIndex(idx);
     }, []);
 
+    const handleCancel = useCallback(() => {
+        cancelledRef.current = true;
+        setIsUploading(false);
+        setStageIndex(-1);
+        stageTimesRef.current = [];
+        setAllDone(false);
+        setError('Processing cancelled. You can upload again or try a different document.');
+        toast('Processing cancelled', 'info');
+    }, [toast]);
+
     // Resume from ImageCapturePage: images were uploaded, session is in "processing" state
     useEffect(() => {
         const state = location.state as { imageSession?: UploadResponse } | null;
@@ -117,6 +129,7 @@ const UploadView: React.FC = () => {
         setDocType('scanned'); // use scanned stages (OCR pipeline)
 
         (async () => {
+            cancelledRef.current = false;
             setIsUploading(true);
             setError(null);
             setAllDone(false);
@@ -154,6 +167,7 @@ const UploadView: React.FC = () => {
                 const start = Date.now();
                 let textDone = false;
                 while (Date.now() - start < 2400000 && !textDone) {
+                    if (cancelledRef.current) return;
                     try {
                         const status = await pollStatus(sessionData.session_id);
                         if (status.has_text || status.status === 'building' || status.status === 'ready') {
@@ -164,6 +178,7 @@ const UploadView: React.FC = () => {
                     } catch (err: any) { if (err.message?.includes('failed')) throw err; }
                     if (!textDone) await new Promise(r => setTimeout(r, 3000));
                 }
+                if (cancelledRef.current) return;
                 if (!textDone) throw new Error('Document processing timed out');
 
                 // PII done
@@ -171,6 +186,7 @@ const UploadView: React.FC = () => {
                 await new Promise(r => setTimeout(r, 200));
 
                 // AI Analysis
+                if (cancelledRef.current) return;
                 advanceStage(2);
                 const analysisData = await analysisApi.analyze(sessionData.session_id);
 
@@ -217,6 +233,7 @@ const UploadView: React.FC = () => {
             return;
         }
 
+        cancelledRef.current = false;
         setIsUploading(true);
         setError(null);
         setAllDone(false);
@@ -228,6 +245,7 @@ const UploadView: React.FC = () => {
             const formData = new FormData();
             formData.append('file', file);
             formData.append('doc_type', docType);
+            formData.append('ai_provider', aiProvider);
             if (docType === 'scanned') {
                 formData.append('ocr_language', ocrLanguage);
                 formData.append('ocr_mode', ocrMode);
@@ -257,6 +275,7 @@ const UploadView: React.FC = () => {
                 const processingTimeout = 2400000; // 40 min
                 let textDone = false;
                 while (Date.now() - start < processingTimeout && !textDone) {
+                    if (cancelledRef.current) return;
                     try {
                         const status = await pollStatus(sessionData.session_id);
                         if (status.has_text || status.status === 'building' || status.status === 'ready') {
@@ -267,10 +286,12 @@ const UploadView: React.FC = () => {
                     } catch (err: any) { if (err.message?.includes('failed')) throw err; }
                     if (!textDone) await new Promise(r => setTimeout(r, 3000));
                 }
+                if (cancelledRef.current) return;
                 if (!textDone) throw new Error('Document processing timed out');
             }
 
             // AI Analysis stage
+            if (cancelledRef.current) return;
             advanceStage(2);
             const analysisData = await analysisApi.analyze(sessionData.session_id);
 
@@ -313,7 +334,7 @@ const UploadView: React.FC = () => {
         } finally {
             setIsUploading(false);
         }
-    }, [docType, ocrLanguage, ocrMode, setSession, setFileUrl, setAnalysis, navigate, advanceStage]);
+    }, [docType, ocrLanguage, ocrMode, aiProvider, setSession, setFileUrl, setAnalysis, navigate, advanceStage]);
 
     const onDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -443,6 +464,69 @@ const UploadView: React.FC = () => {
                             </div>
                         </div>
 
+                        {/* AI Provider Toggle */}
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="font-bold text-sm">AI Provider</p>
+                                <p className="text-xs text-on-surface-variant">
+                                    {aiProvider === 'gemini' ? 'Gemini 2.5 Flash — paid tier'
+                                    : aiProvider === 'groq' ? 'Groq DeepSeek-R1 — free, reasoning model'
+                                    : aiProvider === 'openai' ? 'GPT-4o-mini — OpenAI paid'
+                                    : 'Claude Haiku — best instruction following'}
+                                </p>
+                            </div>
+                            <div className="flex items-center bg-surface-container-high p-1 rounded-lg">
+                                <button
+                                    onClick={() => setAiProvider('gemini')}
+                                    className={cn(
+                                        "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
+                                        aiProvider === 'gemini'
+                                            ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
+                                            : "text-on-surface-variant hover:text-on-surface"
+                                    )}
+                                >
+                                    <Icon name="auto_awesome" size="sm" />
+                                    Gemini
+                                </button>
+                                <button
+                                    onClick={() => setAiProvider('groq')}
+                                    className={cn(
+                                        "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
+                                        aiProvider === 'groq'
+                                            ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
+                                            : "text-on-surface-variant hover:text-on-surface"
+                                    )}
+                                >
+                                    <Icon name="bolt" size="sm" />
+                                    Groq
+                                </button>
+                                <button
+                                    onClick={() => setAiProvider('openai')}
+                                    className={cn(
+                                        "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
+                                        aiProvider === 'openai'
+                                            ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
+                                            : "text-on-surface-variant hover:text-on-surface"
+                                    )}
+                                >
+                                    <Icon name="smart_toy" size="sm" />
+                                    OpenAI
+                                </button>
+                                <button
+                                    onClick={() => setAiProvider('claude')}
+                                    className={cn(
+                                        "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
+                                        aiProvider === 'claude'
+                                            ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
+                                            : "text-on-surface-variant hover:text-on-surface"
+                                    )}
+                                >
+                                    <Icon name="psychology" size="sm" />
+                                    Claude
+                                </button>
+                            </div>
+                        </div>
+
                         {/* OCR Mode Toggle — only visible when scanned */}
                         {docType === 'scanned' && (
                             <div className="flex items-center justify-between">
@@ -466,8 +550,13 @@ const UploadView: React.FC = () => {
                                         Fast
                                     </button>
                                     <button
-                                        onClick={() => toast('Secure OCR (local processing) — coming soon!', 'info')}
-                                        className="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 text-on-surface-variant/50 cursor-not-allowed"
+                                        onClick={() => setOcrMode('secure')}
+                                        className={cn(
+                                            "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
+                                            ocrMode === 'secure'
+                                                ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
+                                                : "text-on-surface-variant hover:text-on-surface"
+                                        )}
                                     >
                                         <Icon name="shield" size="sm" />
                                         Secure
@@ -613,6 +702,19 @@ const UploadView: React.FC = () => {
                                 <p className="text-[11px] text-muted-foreground text-center font-mono uppercase tracking-wider">
                                     Upload a document to begin
                                 </p>
+                            </div>
+                        )}
+
+                        {/* Cancel button — visible during processing */}
+                        {isUploading && !allDone && (
+                            <div className="mt-5 pt-4 border-t border-outline-variant/10">
+                                <button
+                                    onClick={handleCancel}
+                                    className="w-full flex items-center justify-center gap-2 py-2.5 text-xs font-bold text-muted-foreground hover:text-error rounded-lg hover:bg-error/5 transition-all"
+                                >
+                                    <Icon name="cancel" size="sm" />
+                                    <span>Cancel Processing</span>
+                                </button>
                             </div>
                         )}
                     </div>

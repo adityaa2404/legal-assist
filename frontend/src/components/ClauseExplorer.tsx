@@ -61,15 +61,52 @@ const ClauseExplorer: React.FC<ClauseExplorerProps> = ({ clauses }) => {
         }
     };
 
+    // Sort: critical first, then important, then standard
+    // Within each level, sort by risk_rank from Gemini (1 = most dangerous)
+    const importanceOrder = { critical: 0, important: 1, standard: 2 };
+
+    const sortedClauses = [...clauses].sort((a, b) => {
+        const impDiff = (importanceOrder[a.importance] ?? 2) - (importanceOrder[b.importance] ?? 2);
+        if (impDiff !== 0) return impDiff;
+        return (a.risk_rank ?? 99) - (b.risk_rank ?? 99);
+    });
+
+    // Track which section headers we've already rendered
+    let lastImportance = '';
+
     return (
         <div className="space-y-4 animate-fade-in">
-            {clauses.map((clause, idx) => {
+            {sortedClauses.map((clause, idx) => {
                 const isOpen = expanded === idx;
                 const badge = importanceBadge[clause.importance] || importanceBadge.standard;
 
+                // Section header when importance level changes
+                let sectionHeader: React.ReactNode = null;
+                if (clause.importance !== lastImportance) {
+                    lastImportance = clause.importance;
+                    const sectionLabels: Record<string, { icon: string; label: string; desc: string }> = {
+                        critical: { icon: 'warning', label: 'High Risk Clauses', desc: 'These involve your money, property, privacy, or legal liability' },
+                        important: { icon: 'info', label: 'Important Clauses', desc: 'Worth understanding before you sign' },
+                        standard: { icon: 'article', label: 'Standard Clauses', desc: 'Common terms with lower risk' },
+                    };
+                    const section = sectionLabels[clause.importance] || sectionLabels.standard;
+                    sectionHeader = (
+                        <div className={cn("pt-4 pb-2", idx > 0 && "mt-4 border-t border-outline-variant/15")}>
+                            <div className="flex items-center gap-2 mb-1">
+                                <Icon name={section.icon} size="sm" className={clause.importance === 'critical' ? 'text-error' : 'text-muted-foreground'} />
+                                <h3 className={cn("font-headline font-bold text-sm uppercase tracking-wider",
+                                    clause.importance === 'critical' ? 'text-error' : 'text-muted-foreground'
+                                )}>{section.label}</h3>
+                            </div>
+                            <p className="text-xs text-muted-foreground ml-7">{section.desc}</p>
+                        </div>
+                    );
+                }
+
                 return (
+                    <React.Fragment key={idx}>
+                    {sectionHeader}
                     <div
-                        key={idx}
                         className="bg-surface-container-lowest rounded-xl overflow-hidden animate-fade-in relative"
                         style={{ animationDelay: `${idx * 60}ms` }}
                     >
@@ -160,6 +197,7 @@ const ClauseExplorer: React.FC<ClauseExplorerProps> = ({ clauses }) => {
                             </CollapsibleContent>
                         </Collapsible>
                     </div>
+                    </React.Fragment>
                 );
             })}
 
