@@ -21,7 +21,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const { isSignedIn, user: clerkUser, isLoaded: clerkLoaded } = useUser();
-    const { signOut, session } = useClerk();
+    const { signOut } = useClerk();
 
     const [localToken, setLocalToken] = useState<string | null>(() => localStorage.getItem('auth_token'));
     const [localUser, setLocalUser] = useState<AuthUser | null>(() => {

@@ -48,9 +48,9 @@ const AuthPage: React.FC = () => {
                 {/* Clerk components */}
                 <div className="flex justify-center">
                     {mode === 'signin' ? (
-                        <SignIn routing="hash" afterSignInUrl="/upload" />
+                        <SignIn routing="hash" fallbackRedirectUrl="/upload" />
                     ) : (
-                        <SignUp routing="hash" afterSignUpUrl="/upload" />
+                        <SignUp routing="hash" fallbackRedirectUrl="/upload" />
                     )}
                 </div>
 
