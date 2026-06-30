@@ -1,4 +1,4 @@
-import axiosClient from './axiosClient';
+import axiosClient, { getAuthToken } from './axiosClient';
 import { ChatRequest, ChatResponse, SourceSection } from '@/types';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
@@ -31,7 +31,7 @@ export const chatApi = {
         request: ChatRequest,
         callbacks: StreamCallbacks,
     ): Promise<void> => {
-        const token = localStorage.getItem('lawbuddy_token');
+        const token = await getAuthToken();
 
         const response = await fetch(`${baseURL}/chat/stream`, {
             method: 'POST',
@@ -45,8 +45,8 @@ export const chatApi = {
 
         if (!response.ok) {
             if (response.status === 401) {
-                localStorage.removeItem('lawbuddy_token');
-                localStorage.removeItem('lawbuddy_user');
+                localStorage.removeItem('auth_token');
+                localStorage.removeItem('auth_user');
                 window.location.href = '/auth';
                 return;
             }

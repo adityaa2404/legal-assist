@@ -14,12 +14,10 @@ export function registerTokenGetter(fn: () => Promise<string | null>) {
     _getToken = fn;
 }
 
-axiosClient.interceptors.request.use(async (config) => {
+export async function getAuthToken(): Promise<string | null> {
     try {
-        let token: string | null = null;
-
         // 1. Local JWT
-        token = localStorage.getItem('auth_token');
+        let token: string | null = localStorage.getItem('auth_token');
 
         // 2. Registered getter (AuthContext)
         if (!token && _getToken) token = await _getToken();
@@ -30,8 +28,15 @@ axiosClient.interceptors.request.use(async (config) => {
             if (clerk?.session) token = await clerk.session.getToken();
         }
 
-        if (token) config.headers.Authorization = `Bearer ${token}`;
-    } catch { /* no session */ }
+        return token;
+    } catch {
+        return null;
+    }
+}
+
+axiosClient.interceptors.request.use(async (config) => {
+    const token = await getAuthToken();
+    if (token) config.headers.Authorization = `Bearer ${token}`;
     return config;
 });
 

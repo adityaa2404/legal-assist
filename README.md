@@ -288,7 +288,11 @@ Set these HF secrets:
 #### Render (worker service)
 
 - Service type: `Web Service` (free tier)
+- Root directory: `backend`
+- Build command: `pip install -r requirements-worker.txt`
 - Start command: `python app/worker_entry.py`
+
+The worker only needs Celery + the OCR/PII/HTOC pipeline, not the API-layer deps (uvicorn, slowapi, sse-starlette) or the PDF-report deps (weasyprint, matplotlib, jinja2). `backend/requirements-worker.txt` is a trimmed subset of `backend/requirements.txt` for this reason — keep it in sync manually if you add a new import to anything the worker's task chain reaches (`app/worker/tasks.py` → `app/api/v1/documents.py`'s `_process_document_inner`/`_build_htoc_and_bm25` → the services they call). `fastapi` and `python-jose` are still required there even though the worker serves no HTTP, because the task functions import `app.api.v1.documents` directly, which pulls in the whole router module.
 
 Set these Render environment variables:
 
