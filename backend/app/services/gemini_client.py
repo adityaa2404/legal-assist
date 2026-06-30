@@ -614,40 +614,42 @@ Helpful, clear, and approachable — like a knowledgeable friend who reads legal
                 raise Exception("AI returned empty response")
             return response
 
-        try:
-            response = await _retry_on_rate_limit(_call)
-
-            clean_text = self._clean_json_response(response.text)
-            return json.loads(clean_text, strict=False)
-        except json.JSONDecodeError as e:
-            logging.warning(f"JSON parse failed in generate_json: {e} — retrying")
-            # Retry once: Gemini is non-deterministic, second call often produces valid JSON
+        # Gemini gets up to 2 attempts total; any failure on the 2nd attempt falls back to Groq.
+        last_response = None
+        last_error = None
+        for attempt in range(1, 3):
             try:
-                response2 = await _retry_on_rate_limit(_call)
-                clean_text2 = self._clean_json_response(response2.text)
-                return json.loads(clean_text2, strict=False)
-            except json.JSONDecodeError as e2:
-                # Last resort: try to extract JSON object/array from the messy response
-                raw = response.text if response and response.text else ""
-                extracted = self._extract_json_bruteforce(raw)
-                if extracted is not None:
-                    return extracted
-                logging.error(f"JSON Decode Error after retry in generate_json: {e2}")
-                raise Exception(f"AI returned invalid JSON: {str(e2)}")
-            except Exception:
-                raise
-        except Exception as e:
-            err_str = str(e)
-            if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                logging.warning(f"Gemini generate_json unavailable, falling back to Groq (HTOC/tree-search)")
-                try:
-                    return await asyncio.get_event_loop().run_in_executor(
-                        None, _groq_generate_json_sync, prompt
-                    )
-                except Exception as se:
-                    logging.error(f"Groq fallback also failed: {se}")
-            logging.error(f"Gemini generate_json error: {str(e)}")
-            raise
+                response = await _retry_on_rate_limit(_call)
+                last_response = response
+                clean_text = self._clean_json_response(response.text)
+                return json.loads(clean_text, strict=False)
+            except json.JSONDecodeError as e:
+                last_error = e
+                logging.warning(f"JSON parse failed in generate_json (attempt {attempt}/2): {e}")
+                continue
+            except Exception as e:
+                last_error = e
+                logging.warning(f"Gemini generate_json error (attempt {attempt}/2): {e}")
+                continue
+
+        # Both Gemini attempts failed.
+        if isinstance(last_error, json.JSONDecodeError):
+            # Last resort: try to extract JSON object/array from the messy response
+            raw = last_response.text if last_response and last_response.text else ""
+            extracted = self._extract_json_bruteforce(raw)
+            if extracted is not None:
+                return extracted
+
+        logging.warning("Gemini generate_json failed twice, falling back to Groq (HTOC/tree-search)")
+        try:
+            return await asyncio.get_event_loop().run_in_executor(
+                None, _groq_generate_json_sync, prompt
+            )
+        except Exception as se:
+            logging.error(f"Groq fallback also failed: {se}")
+
+        logging.error(f"Gemini generate_json error after 2 attempts: {last_error}")
+        raise Exception(f"AI generation failed after Gemini retries and Groq fallback: {last_error}")
 
     async def chat_with_context(self, question: str, context: str, chat_history: List[Dict[str, str]], source_info: str = "", provider: str = "gemini") -> str:
         """Chat using targeted context from tree search (vectorless RAG)."""

@@ -15,6 +15,7 @@ A privacy-preserving full-stack platform for automated legal document analysis. 
 - **AI-Powered Clause Extraction** — Gemini 2.5 Flash extracts 40+ clauses from loan/legal documents, ranked by real-world danger: property seizure > monetary penalties > criminal liability > privacy risks. **F1 = 0.82, 87.5% recall on critical clauses.**
 - **Indian Legal Domain Knowledge** — Prompt-engineered for Indian property law: Transfer of Property Act, SARFAESI, NI Act, DPDPA. Document-specific checks for Sale Deed, Lease, Mortgage, POA, Gift Deed, and Loan agreements.
 - **Vectorless RAG Chat** — Ask questions about your document. Hybrid BM25 + HTOC (Hierarchical Table of Contents) retrieval achieves **90% hit rate at <5ms latency** with zero embedding cost.
+- **Multi-Provider HTOC Building** — Gemini by default; docs over 50 pages auto-route to Groq (faster, cheaper for large prompts); Gemini failures retry once before falling back to Groq automatically.
 - **Dual OCR Modes** — Fast (Gemini Vision API, 13+ languages) and Secure (EasyOCR, fully local, no data leaves server).
 - **Image Capture** — No PDF? Take photos of your document (up to 15 pages), compressed client-side, stitched to PDF server-side.
 - **PDF Reports** — Download or email styled analysis reports.
@@ -311,6 +312,16 @@ Set these Render environment variables:
 - Keep two UptimeRobot monitors:
       - one for HF API URL
       - one for Render worker health URL
+
+#### Deploying `backend/` to the HF Space
+
+The HF Space is deployed directly from this repo's `backend/` folder via `git subtree push` — there is no separate duplicated folder to keep in sync. `backend/README.md` carries the HF Space frontmatter (`sdk: docker`, etc.) required by Hugging Face.
+
+```bash
+git subtree push --prefix=backend hf-space-remote main
+```
+
+Run this after committing any change under `backend/` that should go live on the Space. The `hf-space-remote` remote points at the HF Space's git URL (`https://huggingface.co/spaces/<user>/<space>`) — add it once with `git remote add hf-space-remote <url>` if it's missing locally.
 
 ---
 

@@ -59,6 +59,10 @@ SKIP_HTOC_THRESHOLD = 3
 GROQ_MAX_PAGES_PER_PROMPT = 40
 GROQ_MAX_CHARS_PER_PAGE_PREVIEW = 200
 
+# Above this many pages, force Groq regardless of the requested provider —
+# Gemini free-tier prompts get too large/slow to be worth attempting first.
+FORCE_GROQ_PAGE_THRESHOLD = 50
+
 
 class HTOCBuilder:
     """
@@ -88,6 +92,14 @@ class HTOCBuilder:
         if num_pages <= SKIP_HTOC_THRESHOLD:
             logger.info(f"Small doc ({num_pages} pages), using simple tree (no LLM call)")
             return self._simple_tree(page_texts)
+
+        # Above the threshold, force Groq regardless of the requested provider.
+        if num_pages > FORCE_GROQ_PAGE_THRESHOLD and ai_provider != "groq":
+            logger.info(
+                f"Doc has {num_pages} pages (>{FORCE_GROQ_PAGE_THRESHOLD}), forcing Groq "
+                f"(requested provider was '{ai_provider}')"
+            )
+            ai_provider = "groq"
 
         max_per_prompt = GROQ_MAX_PAGES_PER_PROMPT if ai_provider == "groq" else MAX_PAGES_PER_PROMPT
         if num_pages <= max_per_prompt:
