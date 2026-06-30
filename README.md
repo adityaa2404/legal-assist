@@ -317,11 +317,30 @@ Set these Render environment variables:
 
 The HF Space is deployed directly from this repo's `backend/` folder via `git subtree push` — there is no separate duplicated folder to keep in sync. `backend/README.md` carries the HF Space frontmatter (`sdk: docker`, etc.) required by Hugging Face.
 
+**One-time setup** (already done in this repo, listed for reference if re-cloning):
+
 ```bash
+git remote add hf-space-remote https://huggingface.co/spaces/<user>/<space>
+```
+
+**Every time you want to ship a `backend/` change to GitHub + the Space:**
+
+```bash
+# 1. Commit your backend/ (and other) changes as normal
+git add -A
+git commit -m "your message"
+
+# 2. Push to GitHub
+git push origin main
+
+# 3. Push backend/ subtree to the HF Space
 git subtree push --prefix=backend hf-space-remote main
 ```
 
-Run this after committing any change under `backend/` that should go live on the Space. The `hf-space-remote` remote points at the HF Space's git URL (`https://huggingface.co/spaces/<user>/<space>`) — add it once with `git remote add hf-space-remote <url>` if it's missing locally.
+Notes:
+- Step 3 only matters when `backend/` itself changed — no need to run it for frontend-only commits.
+- The Space's git history is unrelated to this repo's history, so the first `subtree push` after switching to this workflow rewrites the Space's history (its old commits are replaced). Subsequent pushes are incremental.
+- If step 3 ever fails with a non-fast-forward error, do **not** force-push blindly — check `git log` on the Space first; if needed, run `git subtree push --prefix=backend hf-space-remote main --force` only after confirming you don't need anything from the Space's current state.
 
 ---
 
