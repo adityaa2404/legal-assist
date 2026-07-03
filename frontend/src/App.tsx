@@ -210,7 +210,7 @@ const Footer: React.FC = () => (
       <div className="flex flex-col md:flex-row justify-between items-center w-full gap-4">
         <div className="flex items-center space-x-4">
           <Logo size="sm" />
-          <span className="font-mono text-[10px] tracking-tighter">&copy; 2025 LegalAssist. Auto-Delete in 2 Hours.</span>
+          <span className="font-mono text-[10px] tracking-tighter">&copy; 2026 LegalAssist. Auto-Delete in 2 Hours.</span>
         </div>
         <span className="font-mono text-[10px] tracking-tighter">AI-powered legal document analysis</span>
       </div>
