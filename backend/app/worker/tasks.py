@@ -6,13 +6,25 @@ from celery.exceptions import SoftTimeLimitExceeded
 logger = logging.getLogger(__name__)
 
 
+_worker_loop: asyncio.AbstractEventLoop | None = None
+
+
 def _run(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    """
+    Run an async coroutine from a sync Celery task.
+
+    Reuses one event loop for the lifetime of the worker process instead of
+    creating/closing a loop per task. Async singletons with loop-bound internals
+    (e.g. Motor's AsyncIOMotorClient in app.core.database) are created lazily on
+    first use and stay attached to whichever loop was running at that point —
+    closing that loop after every task would leave those singletons permanently
+    broken ("RuntimeError: Event loop is closed") for the rest of the process.
+    """
+    global _worker_loop
+    if _worker_loop is None or _worker_loop.is_closed():
+        _worker_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_worker_loop)
+    return _worker_loop.run_until_complete(coro)
 
 
 @shared_task(
@@ -24,7 +36,6 @@ def _run(coro):
 def process_document(
     self,
     session_id: str,
-    content_b64: str,
     content_type: str,
     doc_type: str,
     ocr_language: str,
@@ -34,16 +45,28 @@ def process_document(
     """
     Celery task: full document processing pipeline.
     Replaces asyncio.create_task(_process_document_background(...)).
-    content is base64-encoded because Celery serializes args as JSON.
+
+    File bytes are fetched from MongoDB (document_files, keyed by session_id)
+    rather than passed through the task message: managed Redis (e.g. Upstash)
+    hard-rejects single requests above ~8-10MB, and embedding a whole PDF as
+    base64 in the Celery message body silently exceeds that on any file above
+    a few MB, crashing the publish before the task is even enqueued.
     """
-    import base64
     from app.services.pii_anonymizer import PIIAnonymizer
     from app.services.gemini_client import GeminiClient
     from app.services.htoc_builder import HTOCBuilder
     from app.services.session_service import SessionService
+    from app.core.database import get_database
     from app.api.v1.documents import _process_document_inner
 
-    content = base64.b64decode(content_b64)
+    async def _fetch_content() -> bytes:
+        db = get_database()
+        doc = await db.document_files.find_one({"session_id": session_id})
+        if not doc:
+            raise ValueError(f"No stored file found for session {session_id}")
+        return bytes(doc["pdf_bytes"])
+
+    content = _run(_fetch_content())
 
     pii_service = PIIAnonymizer()
     gemini = GeminiClient()

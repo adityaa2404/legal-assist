@@ -1,5 +1,17 @@
 # Legal Assist — Complete Working Document
-**Scope: Digital PDF + Gemini provider, end-to-end**
+**Scope: Digital PDF + split frontend/backend/worker deployment, end-to-end**
+
+## Current Deployment State
+
+The implementation now runs as a split stack rather than a single service:
+
+- **Frontend** — React + Vite app served independently.
+- **Backend API** — FastAPI app handling auth, uploads, chat, and analysis.
+- **Worker** — Celery background processor for document jobs.
+- **Redis** — Shared broker/backend for queued work.
+- **MongoDB** — Session and analysis persistence.
+
+Local development uses `docker-compose.yml` to bring up the full stack. Production/free-tier deployment is split across a static frontend host, Hugging Face Spaces for the API, Render for the worker, Upstash Redis, and MongoDB Atlas.
 
 ---
 
@@ -22,15 +34,16 @@
 
 ```
 Frontend (React + Vite)
-        ↕ REST + SSE
-Backend (FastAPI + Python)
-        ↕
+  ↕ REST + SSE
+Backend API (FastAPI + Python)
+  ↕
+Celery Worker (background jobs)
+  ↕
+Redis                  ← queue / result backend
+  ↕
 MongoDB Atlas          ← sessions, users, history, analysis cache
-        ↕
-Gemini 2.5 Flash API   ← HTOC build, analysis, chat
-Presidio (local)       ← PII anonymization (no external API)
-PyMuPDF (local)        ← digital text extraction
-BM25Okapi (local)      ← keyword search index
+
+Document processing uses local Presidio + PyMuPDF + BM25Okapi, while AI calls go through Gemini by default with Groq/OpenAI/Claude fallbacks where configured.
 ```
 
 **AI Keys used (Gemini provider):**

@@ -12,7 +12,9 @@ services:
       - backend
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -28,17 +30,22 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
       SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-7200}
-      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-50}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-15}
       CORS_ORIGINS: '["http://localhost","http://localhost:80","http://localhost:5173"]'
       REDIS_URL: redis://redis:6379/0
+      # Service-to-service DNS inside the compose network — containers never
+      # actually sleep here like the HF Spaces do, so this ping is just a
+      # harmless no-op fast-path in practice, kept for parity with prod config.
+      WORKER_URL: http://worker:10000
       PORT: 8000
     depends_on:
       - mongo
       - redis
 
   worker:
-    build: ./backend
-    command: python app/worker_entry.py
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
     environment:
       MONGODB_URI: mongodb://mongo:27017
       MONGO_DB_NAME: legal-assist

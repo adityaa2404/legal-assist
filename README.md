@@ -1,6 +1,6 @@
 # Legal Assist AI
 
-A privacy-preserving full-stack platform for automated legal document analysis. Upload contracts, agreements, or case files and get instant risk assessment, clause extraction, and interactive Q&A — all without storing raw documents.
+A privacy-preserving legal document analysis platform with a split frontend/backend deployment model. Upload contracts, agreements, or case files and get risk assessment, clause extraction, and interactive Q&A while keeping document handling local to the backend services.
 
 ![Architecture](docs/architecture.png)
 
@@ -10,7 +10,7 @@ A privacy-preserving full-stack platform for automated legal document analysis. 
 
 ## Features
 
-- **Zero-Retention Processing** — Documents processed in-memory. Raw text never persisted; only PII-anonymized content stored temporarily (TTL 2 hours, auto-deleted).
+- **Session-Scoped Storage** — Documents and extracted text are anonymized before any AI call and stored only for the session lifetime (TTL 2 hours, auto-deleted from MongoDB).
 - **PII Anonymization** — Presidio-powered regex engine with 16 custom Indian recognizers (Aadhaar, PAN, GSTIN, Voter ID, Passport, IFSC, etc.) — **100% detection rate on Indian document IDs**.
 - **AI-Powered Clause Extraction** — Gemini 2.5 Flash extracts 40+ clauses from loan/legal documents, ranked by real-world danger: property seizure > monetary penalties > criminal liability > privacy risks. **F1 = 0.82, 87.5% recall on critical clauses.**
 - **Indian Legal Domain Knowledge** — Prompt-engineered for Indian property law: Transfer of Property Act, SARFAESI, NI Act, DPDPA. Document-specific checks for Sale Deed, Lease, Mortgage, POA, Gift Deed, and Loan agreements.
@@ -23,6 +23,86 @@ A privacy-preserving full-stack platform for automated legal document analysis. 
 
 ---
 
+## Current State
+
+The project runs as a split deployment instead of a single monolith:
+
+- **Frontend** — React + TypeScript + Vite UI, built separately and served as a static app.
+- **Backend API** — FastAPI service that handles auth, uploads, analysis, chat, and document state.
+- **Worker** — Celery worker for background document processing (OCR, PII, HTOC, BM25), deployed as its own container.
+- **Redis** — Shared queue/broker (Upstash in production) between the API and worker.
+- **MongoDB** — Session, user, analysis, and (temporary) raw-file storage.
+
+For local development you do **not** need Docker — see [Running Locally](#running-locally-no-docker) below. `docker-compose.yml` still works as an alternative if you prefer containers.
+
+For deployment, the free-tier split is:
+
+- **Frontend** on a static host such as Vercel.
+- **Backend API** on a Hugging Face Space, built from `backend/Dockerfile`.
+- **Worker** on a **second, separate** Hugging Face Space, built from `backend/Dockerfile.worker`.
+- **Redis** on Upstash — shared broker/backend between both Spaces.
+- **MongoDB** on Atlas.
+
+Full deploy steps: [Deploying to Hugging Face (two Spaces)](#deploying-to-hugging-face-two-spaces).
+
+### Architecture notes from getting this working end-to-end
+
+A few non-obvious things this system depends on to actually run correctly under a split API+worker deployment on managed free-tier infra:
+
+- **One event loop per worker process, not per task.** Celery tasks are sync functions that bridge into async code. The naive pattern — `asyncio.new_event_loop()` + `run_until_complete()` + `loop.close()` inside every task — breaks any async singleton with loop-bound internals (MongoDB's Motor client is created once and binds to whichever loop is running the first time it's used). Once that loop closes, every later task in the same worker process fails with `RuntimeError: Event loop is closed` on its first DB write. `app/worker/tasks.py` reuses one loop for the worker process's lifetime instead.
+- **Large files never go through the Celery message body.** `process_document.delay(...)` used to embed the whole file as base64 directly in the task payload. Managed Redis (Upstash) hard-rejects single requests above roughly 8–10MB and drops the connection — so any scanned PDF or large digital PDF past a few MB would crash the upload with a raw 500, deterministically, every time. Uploaded bytes are now written to MongoDB (`document_files`, keyed by `session_id`) *before* the task is queued; the task fetches them by ID instead of carrying them through Redis. `MAX_FILE_SIZE_MB` is capped at 15 to stay under MongoDB's 16MB BSON document limit.
+- **Broker connections need retry/keepalive configured explicitly.** Upstash closes idle connections; without `broker_connection_retry`, `broker_pool_limit=None`, and keepalive options in `celery_app.py`, a stale pooled connection on the API process raises straight through `.delay()` as a 500 instead of transparently reconnecting.
+- **Only one worker process per environment.** Running two `worker_entry.py` processes against the same Redis queue (e.g. a leftover local process you forgot about, or a duplicate Space) causes tasks to be picked up and orphaned mid-flight if either instance dies, which looks exactly like "uploads randomly get stuck."
+- **Two independently-sleeping Spaces need explicit wake coordination.** See below.
+
+### Worker wake coordination (two independently-sleeping Spaces)
+
+Hugging Face Spaces on free tier sleep when idle, and — unlike a single-service deployment — a request that wakes the **API** Space does **not** wake the **worker** Space. They're separate containers with separate idle timers; a Space only wakes on traffic to its own URL. Without something forcing the wake, an upload can queue a Celery task to Redis while the worker is still asleep, and it just sits there until something else happens to hit the worker directly.
+
+The fix: `GET /api/v1/health` (already polled by the frontend every 15s, see `useServerHealth.ts`) fires a fire-and-forget ping to the worker Space's own URL whenever the worker's Redis heartbeat looks stale:
+
+```
+Frontend polls /health every 15s
+        │
+        ▼
+API checks worker:heartbeat key in Redis
+        │
+        ├─ fresh (< 45s old) → status: healthy, respond normally
+        │
+        └─ stale/missing → status: starting
+                 │
+                 ▼
+          API fires GET <WORKER_URL> in the background
+          (does not block the /health response)
+                 │
+                 ▼
+          Worker Space wakes, starts Celery + heartbeat thread
+                 │
+                 ▼
+          Next /health poll (≤15s later) sees a fresh heartbeat → healthy
+```
+
+This requires one extra environment variable on the **API** Space: `WORKER_URL`, set to the worker Space's public URL (e.g. `https://<user>-<worker-space>.hf.space`). Without it, the ping is skipped (safe no-op) and you're back to relying on external uptime pings to wake the worker.
+
+The frontend (`App.tsx`) blocks the whole app behind `worker_status: healthy` — this is intentional: if the worker isn't up, uploads would appear to succeed and then silently never finish, which is worse than a clear "waking up" screen.
+
+---
+
+## How It Works
+
+1. **Upload and validate** — The frontend sends a PDF, DOCX, or image-capture job to the backend upload endpoint.
+2. **Extract text** — PyMuPDF handles digital PDFs first; scanned pages or image documents move to OCR.
+3. **Anonymize PII** — Presidio and regex-based recognizers replace sensitive values with tokens before any AI call.
+4. **Create session state** — The backend stores anonymized text, page text, and metadata in MongoDB with TTL cleanup.
+5. **Build retrieval indexes** — HTOC and BM25 artifacts are prepared so the chat and analysis paths can reuse the document structure.
+6. **Process in background** — Long-running work runs through Celery so the API can return quickly while the worker finishes jobs.
+7. **Run analysis and chat** — Gemini is used by default, with Groq/OpenAI/Claude fallbacks where configured, and responses are de-anonymized before returning to the UI.
+8. **Return reports** — The frontend can render analysis, chat, history, clause views, and PDF/email reports from the stored session data.
+
+For the detailed phase-by-phase walkthrough, see [working.md](working.md).
+
+---
+
 ## System Architecture
 
 ### Processing Pipeline
@@ -30,13 +110,13 @@ A privacy-preserving full-stack platform for automated legal document analysis. 
 ```
                     ┌─────────────────────────────┐
                     │      React 19 Frontend       │
-                    │  Upload │ Dashboard │ Chat    │
+                    │  Upload │ Dashboard │ Chat   │
                     └────────────┬────────────────┘
                                  │ HTTPS + JWT
                                  ▼
                     ┌─────────────────────────────┐
-                    │      FastAPI Backend          │
-                    │  Auth │ Rate Limit │ CORS     │
+                    │      FastAPI Backend        │
+                    │  Auth │ CORS │ Rate Limit   │
                     └────────────┬────────────────┘
                                  │
               ┌──────────────────┼──────────────────┐
@@ -44,19 +124,16 @@ A privacy-preserving full-stack platform for automated legal document analysis. 
         ┌──────────┐     ┌────────────┐      ┌──────────┐
         │ OCR Engine│     │   Privacy   │      │ Retrieval│
         │          │     │   Layer     │      │  + AI    │
-        │ PyMuPDF  │     │            │      │          │
-        │ (digital)│────▶│ PII Anon.  │─────▶│ HTOC Tree│
-        │          │     │ 16 Presidio │      │ BM25 Idx │
-        │ Gemini   │     │ patterns    │      │ Analysis │
-        │ Vision   │     │ Single-pass │      │ Chat SSE │
-        │ (fast)   │     │ O(n) regex  │      │          │
-        │          │     │            │      │          │
-        │ EasyOCR  │     └────────────┘      └─────┬────┘
-        │ (secure) │                                │
-        └──────────┘                    ┌───────────┼──────────┐
-                                        ▼           ▼          ▼
-                                    MongoDB    Gemini API   Gemini
-                                   (TTL 2h)   (Analysis)   Vision
+        │ PyMuPDF  │     │             │      │          │
+        │ Gemini   │────▶│ PII Anon.  │─────▶│ HTOC Tree│
+        │ Vision   │     │ Presidio    │      │ BM25 Idx │
+        │ EasyOCR  │     │ + regex     │      │ Chat SSE │
+        └──────────┘     └────────────┘      └─────┬────┘
+                                                    │
+                           ┌────────────────────────┼────────────────────────┐
+                           ▼                        ▼                        ▼
+                      MongoDB                 Gemini / Groq /              Redis
+                    (sessions, TTL)            OpenAI / Claude           (queue/broker)
 ```
 
 ### Three OCR Modes
@@ -176,10 +253,12 @@ User Question
 |---|---|
 | FastAPI | Async API framework |
 | Google Gemini 2.5 Flash | Document analysis, chat, OCR |
+| Groq / OpenAI / Claude | Optional fallback providers |
 | Presidio | PII detection (16 custom Indian patterns) |
 | PyMuPDF | PDF text extraction & rendering |
 | EasyOCR | Local OCR (13+ Indian languages) |
 | MongoDB (Motor) | Async session store with TTL |
+| Celery + Redis | Background processing queue |
 | BM25 (rank-bm25) | Keyword search with HTOC boost |
 | WeasyPrint | PDF report generation |
 | SSE-Starlette | Server-sent events for chat streaming |
@@ -192,22 +271,28 @@ User Question
 
 - Python 3.11+
 - Node.js 18+
-- MongoDB (local or [Atlas free tier](https://www.mongodb.com/cloud/atlas))
+- MongoDB (local, or [Atlas free tier](https://www.mongodb.com/cloud/atlas))
+- Redis (a free [Upstash](https://upstash.com/) instance is the simplest — no local Redis install needed, and it matches production exactly)
 - [Google Gemini API key](https://aistudio.google.com/apikey)
 
-### 1. Clone
+Clone the repo:
 
 ```bash
 git clone https://github.com/adityaa2404/legal-assist.git
 cd legal-assist
 ```
 
-### 2. Backend Setup
+## Running Locally (no Docker)
+
+The API and the worker are two separate long-running processes that both need to be up for uploads to actually complete — the API queues jobs, the worker consumes them. Docker Compose still works if you prefer it (see [Docker (Alternative)](#docker-alternative)), but everything below runs with plain `venv`/`npm`, matching how the two split HF Spaces run in production.
+
+### 1. Backend environment
 
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
 ```
 
@@ -219,19 +304,50 @@ MONGO_DB_NAME=legal-assist
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_HTOC_API_KEY=your-second-key        # optional, for rate limit isolation
 GEMINI_CHAT_API_KEY=your-third-key         # optional, for rate limit isolation
+GROQ_API_KEY=your-groq-key                 # optional, HTOC fallback + large-doc routing
 JWT_SECRET=your-secret-key
+SESSION_SECRET=your-session-secret
 SESSION_TTL_SECONDS=7200
 GEMINI_TIMEOUT=180
+MAX_FILE_SIZE_MB=15                        # MongoDB's BSON document cap is 16MB — don't raise this without moving file storage off Mongo
 CORS_ORIGINS=["http://localhost:5173"]
+REDIS_URL=rediss://default:<password>@<your-instance>.upstash.io:6379/0
 ```
 
-Start the backend:
+`JWT_SECRET` and `SESSION_SECRET` are auto-generated if omitted, but every process restart then invalidates all issued tokens/sessions — set them explicitly for anything beyond a quick smoke test.
+
+### 2. Start the API (terminal 1)
 
 ```bash
+cd backend
+venv\Scripts\activate
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 3. Frontend Setup
+Confirm it's up: [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health) should return `{"status": "waking", "worker_status": "starting", ...}` until the worker (next step) is also running.
+
+### 3. Start the worker (terminal 2, separate from the API)
+
+```bash
+cd backend
+venv\Scripts\activate
+python app/worker_entry.py
+```
+
+This starts Celery (`--pool=solo` automatically on Windows — the default prefork pool is flaky there for OCR-heavy tasks) plus a heartbeat thread that writes to Redis every ~15s so the API's `/health` can tell the worker is alive. Watch for `celery@<hostname> ready.` in the log — that means it's connected to Redis and pulling from the queue.
+
+**Only one worker process can run at a time against a given code checkout — this is enforced, not just a suggestion.** `worker_entry.py` writes a PID lock file (`app/.worker.lock`) on startup and refuses to start a second instance while a live one holds it, printing the PID to kill instead of silently letting two workers compete on the same queue. (Two workers on the same queue causes tasks to get picked up and orphaned mid-flight if either instance dies or you kill one without the other — this looks exactly like "uploads randomly get stuck" and was the single most common footgun while building this.) A worker that crashes or gets force-killed leaves a stale lock behind; the next `worker_entry.py` you start detects the old PID is dead and reclaims it automatically — no manual cleanup needed. If you do hit the "already running" error and want to check what's actually alive:
+
+```bash
+# Windows — list any leftover worker/celery processes
+wmic process where "name='celery.exe' or name='python.exe'" get ProcessId,CommandLine
+# kill by PID if you find a stale one
+taskkill /F /T /PID <pid>
+```
+
+Re-checking [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health) after the worker logs `ready` should now show `"status": "ok", "worker_status": "healthy"`.
+
+### 4. Frontend
 
 ```bash
 cd frontend
@@ -252,99 +368,81 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173).
 
-### 4. Docker (Alternative)
+### Docker (Alternative)
 
 ```bash
 docker-compose up --build
 ```
 
-This starts frontend (port 80), backend (port 8000), and MongoDB (port 27017).
+This starts the full local stack: frontend (port 80), backend (port 8000), worker, MongoDB (port 27017), and Redis (port 6379).
 
-### 5. Split Deployment (HF Spaces + Render Worker + Upstash Redis)
+Dockerfile roles:
 
-Use this topology when you want Hugging Face Spaces to serve only HTTP API traffic while a separate Render service runs Celery workers.
+- `backend/Dockerfile` — API image. Runs `uvicorn app.main:app`. Used for both `docker-compose` and the API HF Space.
+- `backend/Dockerfile.worker` — worker image. Runs `python app/worker_entry.py` against the trimmed `requirements-worker.txt`. Used for the worker HF Space (not currently wired into `docker-compose.yml`, which runs the worker via the main image + an overridden command instead).
+- `frontend/Dockerfile` — static frontend image, for Nginx hosting or a static container host — not for Hugging Face Spaces.
 
-- Hugging Face Space: FastAPI API only (no Celery worker process)
-- Render Web Service: Celery worker process + tiny health listener
-- Upstash Redis: Celery broker/backend shared by both
-- MongoDB Atlas: unchanged
+---
 
-#### Hugging Face Spaces (API service)
+## Deploying to Hugging Face (two Spaces)
 
-- Build from this repo's `backend/Dockerfile`
-- Container listens on `${PORT:-7860}`
-- Celery dispatch remains active in upload flow (jobs are queued to Redis)
+The API and the worker deploy as **two separate Hugging Face Spaces**, both built from this same `backend/` folder via `git subtree push` — no duplicated app code. What differs between the two Spaces is just which `Dockerfile` gets built, which is controlled by each Space's `README.md` frontmatter.
 
-Set these HF secrets:
+- **API Space** — builds `backend/Dockerfile` (`sdk: docker`, no `dockerfile:` override needed — it's the default `Dockerfile`). Serves HTTP traffic, queues jobs to Redis.
+- **Worker Space** — builds `backend/Dockerfile.worker` via the `dockerfile: Dockerfile.worker` frontmatter key. Runs Celery, consumes jobs from the same Redis.
 
-- `MONGODB_URI`
-- `MONGO_DB_NAME`
-- `GEMINI_API_KEY`
-- `SESSION_SECRET`
-- `JWT_SECRET`
-- `REDIS_URL` (Upstash URL, same exact value as Render)
-- `CORS_ORIGINS` (JSON string, for example `["https://your-frontend.vercel.app"]`)
+Both talk to the same Redis (Upstash) and MongoDB (Atlas) — that's what makes them one logical backend split across two containers.
 
-#### Render (worker service)
+### One-time setup
 
-- Service type: `Web Service` (free tier)
-- Root directory: `backend`
-- Build command: `pip install -r requirements-worker.txt`
-- Start command: `python app/worker_entry.py`
+1. Create two HF Spaces (Docker SDK): one for the API, one for the worker.
+2. Add both as git remotes:
+   ```bash
+   git remote add hf-space-remote https://huggingface.co/spaces/<user>/<api-space>
+   git remote add hf-worker-remote https://huggingface.co/spaces/<user>/<worker-space>
+   ```
+3. Set environment variables/secrets on **both** Spaces (`MONGODB_URI`, `MONGO_DB_NAME`, `GEMINI_API_KEY` and friends, `JWT_SECRET`, `SESSION_SECRET`, `REDIS_URL`) — the worker and API **must** share the exact same `REDIS_URL`, `MONGODB_URI`, and auth secrets, or queued jobs and session state won't line up between them.
+4. On the **API Space only**, additionally set `WORKER_URL` to the worker Space's public URL (e.g. `https://<user>-<worker-space>.hf.space`) — this is what lets `/health` wake the worker; see [Worker wake coordination](#worker-wake-coordination-two-independently-sleeping-spaces) above.
+5. On the API Space, also set `CORS_ORIGINS` to your deployed frontend's origin (JSON array string, e.g. `["https://your-frontend.vercel.app"]`).
 
-The worker only needs Celery + the OCR/PII/HTOC pipeline, not the API-layer deps (uvicorn, slowapi, sse-starlette) or the PDF-report deps (weasyprint, matplotlib, jinja2). `backend/requirements-worker.txt` is a trimmed subset of `backend/requirements.txt` for this reason — keep it in sync manually if you add a new import to anything the worker's task chain reaches (`app/worker/tasks.py` → `app/api/v1/documents.py`'s `_process_document_inner`/`_build_htoc_and_bm25` → the services they call). `fastapi` and `python-jose` are still required there even though the worker serves no HTTP, because the task functions import `app.api.v1.documents` directly, which pulls in the whole router module.
+### Every time you ship a `backend/` change
 
-Set these Render environment variables:
-
-- `MONGODB_URI`
-- `MONGO_DB_NAME`
-- `GEMINI_API_KEY`
-- `SESSION_SECRET`
-- `JWT_SECRET` (must match HF)
-- `REDIS_URL` (must match HF exactly)
-- `PORT=10000`
-
-`app/worker_entry.py` starts:
-
-- a dummy HTTP health listener (`0.0.0.0:$PORT`) required by Render Web Service checks
-- Celery worker (`celery -A app.worker.celery_app:celery worker --loglevel=info --concurrency=2`) as foreground process
-
-#### Important free-tier behavior
-
-- HF Spaces and Render free tier can sleep when idle.
-- Render does not wake from Redis queue traffic alone.
-- Keep two UptimeRobot monitors:
-      - one for HF API URL
-      - one for Render worker health URL
-
-#### Deploying `backend/` to the HF Space
-
-The HF Space is deployed directly from this repo's `backend/` folder via `git subtree push` — there is no separate duplicated folder to keep in sync. `backend/README.md` carries the HF Space frontmatter (`sdk: docker`, etc.) required by Hugging Face.
-
-**One-time setup** (already done in this repo, listed for reference if re-cloning):
+`backend/README.md` is what HF actually reads for frontmatter, and it can only point at one Dockerfile at a time — so which variant is checked out into `README.md` determines which Space you're about to push to. `README.api.md` and `README.worker.md` hold the two variants; swap the active one in before each push.
 
 ```bash
-git remote add hf-space-remote https://huggingface.co/spaces/<user>/<space>
-```
-
-**Every time you want to ship a `backend/` change to GitHub + the Space:**
-
-```bash
-# 1. Commit your backend/ (and other) changes as normal
+# 1. Commit your changes as normal
 git add -A
 git commit -m "your message"
-
-# 2. Push to GitHub
 git push origin main
 
-# 3. Push backend/ subtree to the HF Space
+# 2. Push the API Space (README.md already has the API frontmatter by default)
 git subtree push --prefix=backend hf-space-remote main
+
+# 3. Push the worker Space — swap frontmatter in, push, then swap back
+cp backend/README.api.md backend/README.md.tmp   # keep a copy of what's currently active
+cp backend/README.worker.md backend/README.md
+git add backend/README.md
+git commit -m "worker space frontmatter"
+git subtree push --prefix=backend hf-worker-remote main
+
+# 4. Restore the API frontmatter so the working tree is back to its normal state
+cp backend/README.md.tmp backend/README.md
+rm backend/README.md.tmp
+git add backend/README.md
+git commit -m "restore api space frontmatter"
+git push origin main
 ```
 
 Notes:
-- Step 3 only matters when `backend/` itself changed — no need to run it for frontend-only commits.
-- The Space's git history is unrelated to this repo's history, so the first `subtree push` after switching to this workflow rewrites the Space's history (its old commits are replaced). Subsequent pushes are incremental.
-- If step 3 ever fails with a non-fast-forward error, do **not** force-push blindly — check `git log` on the Space first; if needed, run `git subtree push --prefix=backend hf-space-remote main --force` only after confirming you don't need anything from the Space's current state.
+- You only need step 3 when `backend/app`, `Dockerfile.worker`, or `requirements-worker.txt` changed — most day-to-day backend changes only touch the API path and just need step 2.
+- The worker only needs Celery + the OCR/PII/HTOC pipeline, not the API-layer deps (uvicorn, slowapi, sse-starlette) or the PDF-report deps (weasyprint, matplotlib, jinja2). `backend/requirements-worker.txt` is a trimmed subset of `backend/requirements.txt` for this reason — keep it in sync manually if you add a new import to anything the worker's task chain reaches (`app/worker/tasks.py` → `app/api/v1/documents.py`'s `_process_document_inner`/`_build_htoc_and_bm25` → the services they call). `fastapi` and `python-jose` are still required there even though the worker serves no HTTP, because the task functions import `app.api.v1.documents` directly, which pulls in the whole router module.
+- Each Space's git history is unrelated to this repo's history and to each other, so the first `subtree push` to a fresh Space rewrites its history. Subsequent pushes are incremental.
+- If a subtree push ever fails with a non-fast-forward error, do **not** force-push blindly — check `git log` on the Space first; if needed, add `--force` only after confirming you don't need anything from the Space's current state.
+
+### Important free-tier behavior
+
+- Both Spaces sleep independently when idle, and neither wakes on traffic to the *other* Space — only on a request to its own URL. The `WORKER_URL` wake-ping from `/health` (above) handles the common case, but it only fires from an already-awake API. If the API itself is asleep, nothing pings anything until a user (or an external uptime monitor) hits the API URL first.
+- For zero-cold-start behavior, keep two external uptime monitors (e.g. UptimeRobot, free tier): one hitting the API's `/api/v1/health`, one hitting the worker's root URL directly. This is a backstop, not a replacement for the `WORKER_URL` wiring — the wake-ping means a single monitor hitting only the API is now enough to bring both up, but two monitors is more robust if either Space's sleep timer differs.
 
 ---
 
@@ -360,9 +458,10 @@ Notes:
 | `GEMINI_TIMEOUT` | No | `90` | Max wait per Gemini call (seconds) |
 | `JWT_SECRET` | No | Auto-generated | JWT signing secret (set for production!) |
 | `SESSION_TTL_SECONDS` | No | `7200` | Session expiry (seconds) |
-| `MAX_FILE_SIZE_MB` | No | `50` | Max upload size |
+| `MAX_FILE_SIZE_MB` | No | `15` | Max upload size. Capped below MongoDB's 16MB BSON document limit — raw file bytes are stored in `document_files` for the worker to fetch, so this must stay under that ceiling |
 | `CORS_ORIGINS` | No | `["http://localhost:5173"]` | Allowed frontend origins (JSON array string recommended in env) |
-| `REDIS_URL` | Yes | — | Redis broker/backend URL (Upstash in split HF + Render deployment) |
+| `REDIS_URL` | Yes | — | Redis broker/backend URL (Upstash in the split two-Space deployment) — must match exactly between the API and worker Spaces |
+| `WORKER_URL` | No (API Space only) | — | Worker Space's public URL. When set, `/health` fires a background ping to it whenever the worker's heartbeat looks stale, so the worker wakes alongside the API instead of needing a separate external ping |
 | `SMTP_HOST` | No | — | Email server for report delivery |
 | `RATE_LIMIT_RPM` | No | `300` | API rate limit per minute |
 
@@ -418,8 +517,9 @@ legal-assist/
 │   │   │   ├── documents.py       # Upload + OCR + PII + image capture
 │   │   │   ├── analysis.py        # Gemini analysis + caching
 │   │   │   ├── chat.py            # Hybrid RAG chat + streaming
-│   │   │   └── auth.py            # JWT auth + rate limiting
-│   │   ├── core/                  # Config, dependencies, DB
+│   │   │   ├── auth.py            # JWT auth + rate limiting
+│   │   │   └── health.py          # /health — worker heartbeat check + wake-ping
+│   │   ├── core/                  # Config, dependencies, DB, Redis client
 │   │   ├── services/
 │   │   │   ├── gemini_client.py   # Gemini API (3 clients, retry on 429/503)
 │   │   │   ├── pii_anonymizer.py  # 16 Presidio regex patterns, single-pass O(n)
@@ -428,6 +528,10 @@ legal-assist/
 │   │   │   ├── tree_search.py     # LLM-guided HTOC tree navigation
 │   │   │   ├── document_parser.py # PyMuPDF + Gemini Vision + EasyOCR
 │   │   │   └── session_service.py # MongoDB sessions + ownership
+│   │   ├── worker/
+│   │   │   ├── celery_app.py      # Celery app + broker retry/keepalive config
+│   │   │   └── tasks.py           # process_document, build_htoc_bm25 — fetch file bytes from Mongo, not the task payload
+│   │   ├── worker_entry.py        # Worker process entrypoint (dummy health server + heartbeat thread + Celery)
 │   │   └── models/                # Pydantic schemas
 │   ├── evaluation/                # Benchmark suite
 │   │   ├── run_eval.py            # Full pipeline evaluation
@@ -436,7 +540,13 @@ legal-assist/
 │   │   ├── clause_benchmark.py    # Clause detection P/R/F1
 │   │   ├── search_benchmark.py    # BM25 vs TF-IDF vs Tree DFS/BFS
 │   │   └── storage_benchmark.py   # Vector RAG vs HTOC storage
-│   └── requirements.txt
+│   ├── Dockerfile                 # API Space image
+│   ├── Dockerfile.worker          # Worker Space image
+│   ├── README.md                  # Active HF Space frontmatter (whichever Space you last pushed)
+│   ├── README.api.md              # API Space frontmatter (source of truth, copy into README.md before pushing hf-space-remote)
+│   ├── README.worker.md           # Worker Space frontmatter (copy into README.md before pushing hf-worker-remote)
+│   ├── requirements.txt           # Full API dependency set
+│   └── requirements-worker.txt    # Trimmed worker-only dependency set
 ├── docs/
 │   ├── architecture.puml          # Combined architecture (PlantUML)
 │   ├── architecture.png           # Rendered diagram
@@ -480,7 +590,7 @@ python -m evaluation.storage_benchmark --pdf evaluation/docs/sliceSFBLoanApplica
 ## Privacy & Security
 
 - **Anonymize-first** — PII detected and replaced with tokens (`[PERSON_1]`, `[IN_AADHAAR_1]`) before any text reaches Gemini
-- **Zero raw storage** — Original document text never persisted to disk or database
+- **Anonymized-at-rest** — Extracted text is PII-anonymized before storage; raw file bytes are kept only to support OCR/re-processing and are deleted with the session
 - **Session ownership** — Each session tied to user email; cross-user access blocked
 - **Auto-expiry** — MongoDB TTL index auto-deletes all session data after 2 hours
 - **Error sanitization** — Internal errors logged but never exposed to clients

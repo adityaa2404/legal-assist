@@ -17,6 +17,7 @@ import { useTheme } from './contexts/ThemeContext';
 import { useUser as useClerkUser } from '@clerk/react';
 import Icon from './components/ui/icon';
 import { Logo, LogoIcon } from './components/ui/Logo';
+import { useServerHealth } from './hooks/useServerHealth';
 
 /* ── Route Guards ── */
 
@@ -85,7 +86,7 @@ const TopBar: React.FC<{ minimal?: boolean }> = ({ minimal }) => {
         <div className="flex items-center space-x-1">
           <div className="glass-badge px-3 py-1 rounded-full hidden sm:flex items-center space-x-1.5 mr-2">
             <Icon name="verified_user" size="sm" filled className="text-primary" />
-            <span className="text-[10px] font-bold tracking-tighter font-mono text-foreground">Zero Retention</span>
+            <span className="text-[10px] font-bold tracking-tighter font-mono text-foreground">Auto-Delete 2h</span>
           </div>
 
           <button onClick={toggleTheme} className="p-2 hover:bg-muted rounded-md transition-all" title="Toggle theme">
@@ -209,7 +210,7 @@ const Footer: React.FC = () => (
       <div className="flex flex-col md:flex-row justify-between items-center w-full gap-4">
         <div className="flex items-center space-x-4">
           <Logo size="sm" />
-          <span className="font-mono text-[10px] tracking-tighter">&copy; 2025 LegalAssist. Zero Retention Guaranteed.</span>
+          <span className="font-mono text-[10px] tracking-tighter">&copy; 2025 LegalAssist. Auto-Delete in 2 Hours.</span>
         </div>
         <span className="font-mono text-[10px] tracking-tighter">AI-powered legal document analysis</span>
       </div>
@@ -272,6 +273,31 @@ const DashboardLayout: React.FC<{ children: React.ReactNode; hideFooter?: boolea
 
 const App: React.FC = () => {
   const { isAuthenticated } = useAuth();
+  const { status: serverStatus, workerStatus } = useServerHealth();
+
+  if (serverStatus !== 'live') {
+    return (
+      <div className="min-h-screen min-h-dvh bg-background text-foreground flex items-center justify-center px-6">
+        <div className="max-w-xl w-full rounded-2xl border border-border bg-surface-low p-8 text-center shadow-2xl">
+          <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full mb-6">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+            </span>
+            <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-amber-600 dark:text-amber-400">Maintenance</span>
+          </div>
+          <h1 className="font-headline font-extrabold text-3xl sm:text-4xl tracking-tight mb-4">Legal Assist is waking up</h1>
+          <p className="text-on-surface-variant text-base sm:text-lg leading-relaxed mb-6">
+            The backend or worker is not fully ready yet. We block access until both services are healthy so OCR and analysis do not get stuck midway.
+          </p>
+          <div className="text-sm text-muted-foreground space-y-1">
+            <p>Backend status: {serverStatus === 'checking' ? 'checking' : 'waking'}</p>
+            <p>Worker status: {workerStatus}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Router>

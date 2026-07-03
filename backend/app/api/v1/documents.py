@@ -17,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from typing import List, Optional
 import asyncio
-import base64
 import logging
 import pymupdf
 from app.worker.tasks import process_document, build_htoc_bm25
@@ -48,6 +47,27 @@ ALLOWED_TYPES = [
 
 
 BACKGROUND_TASK_TIMEOUT = 600  # 10 minutes max for any background pipeline
+
+
+async def _store_file_for_worker(session_id: str, content: bytes, filename: str) -> None:
+    """
+    Persist raw file bytes for the Celery worker to fetch by session_id.
+    Upserts so this is safe to call even if a document_files row already
+    exists for the session (e.g. image-capture uploads that store it earlier
+    for viewing/download).
+    """
+    db = get_database()
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
+    await db.document_files.update_one(
+        {"session_id": session_id},
+        {"$set": {
+            "session_id": session_id,
+            "pdf_bytes": Binary(content),
+            "filename": filename,
+            "expires_at": expires_at,
+        }},
+        upsert=True,
+    )
 
 
 def _build_chunks_from_pages(page_texts: list) -> list:
@@ -244,10 +264,10 @@ async def upload_document(
             }
         )
 
-        # Enqueue OCR + PII + HTOC + BM25 as Celery task
+        # Store file for the worker to fetch, then enqueue OCR + PII + HTOC + BM25
+        await _store_file_for_worker(session.session_id, content, file.filename)
         process_document.delay(
             session_id=session.session_id,
-            content_b64=base64.b64encode(content).decode(),
             content_type=file.content_type,
             doc_type=doc_type,
             ocr_language=ocr_language,
@@ -300,9 +320,9 @@ async def upload_document(
             }
         )
 
+        await _store_file_for_worker(session.session_id, content, file.filename)
         process_document.delay(
             session_id=session.session_id,
-            content_b64=base64.b64encode(content).decode(),
             content_type=file.content_type,
             doc_type=doc_type,
             ocr_language=ocr_language,
@@ -529,7 +549,6 @@ async def upload_document_images(
 
     process_document.delay(
         session_id=session.session_id,
-        content_b64=base64.b64encode(pdf_content).decode(),
         content_type="application/pdf",
         doc_type="scanned",
         ocr_language=ocr_language,

@@ -38,7 +38,7 @@ const DisclaimerModal: React.FC = () => {
                             'This tool does NOT provide legal advice. All analysis is AI-generated and may contain errors.',
                             'You should always consult a qualified legal professional before making decisions based on any analysis.',
                             'AI confidence scores and risk assessments are approximate and should not be solely relied upon.',
-                            'Your documents are processed in-memory and auto-deleted after the session expires (2 hours).',
+                            'Your documents are stored only for the duration of your session and auto-deleted after it expires (2 hours).',
                             'PII (personal identifiable information) is anonymized locally before any AI processing.',
                         ].map((item, i) => (
                             <li key={i} className="flex items-start gap-2">

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     SESSION_SECRET: str = secrets.token_urlsafe(64)
     SESSION_TTL_SECONDS: int = 7200  # 2 hours
     ALLOWED_EXTENSIONS: List[str] = ["pdf", "docx"]
-    MAX_FILE_SIZE_MB: int = 50  # Max upload size (supports up to ~1000 page PDFs)
+    MAX_FILE_SIZE_MB: int = 15  # MongoDB BSON document cap is 16MB — document_files.pdf_bytes must fit under it
 
     # CORS config (prefer JSON string env, e.g. ["https://your-frontend.vercel.app"])
     CORS_ORIGINS: List[str] = ["http://localhost:5173"]
@@ -48,8 +48,9 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: Optional[str] = None
     SMTP_FROM_NAME: str = "Legal Assist AI"
 
-    # REDIS / CELERY config (required in split HF API + Render worker deployment)
+    # REDIS / CELERY config (required in split-deployment: API + worker as separate services)
     REDIS_URL: str
+    WORKER_URL: Optional[str] = None  # worker Space's public URL — pinged by /health to co-wake it
 
     # RATE LIMIT config
     RATE_LIMIT_RPM: int = 300

@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime deps for OCR (EasyOCR/PyMuPDF need these even without the PDF-report stack)
+RUN apt-get update && apt-get install -y \
+    build-essential gcc libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-worker.txt .
+RUN pip install --no-cache-dir -r requirements-worker.txt
+
+COPY ./app ./app
+
+# Add a non-root user for security
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+ENV PORT=7860
+EXPOSE 7860
+
+CMD ["python", "app/worker_entry.py"]

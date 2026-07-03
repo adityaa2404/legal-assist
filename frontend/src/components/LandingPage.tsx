@@ -1,33 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import Icon from './ui/icon';
-import axiosClient from '@/api/axiosClient';
-
-type ServerStatus = 'checking' | 'live' | 'waking';
-
-function useServerStatus(): ServerStatus {
-    const [status, setStatus] = useState<ServerStatus>('checking');
-
-    useEffect(() => {
-        let mounted = true;
-        const check = () => {
-            axiosClient.get('/health', { timeout: 5000 })
-                .then(() => { if (mounted) setStatus('live'); })
-                .catch(() => { if (mounted) setStatus('waking'); });
-        };
-        check();
-        const id = setInterval(check, 15000);
-        return () => { mounted = false; clearInterval(id); };
-    }, []);
-
-    return status;
-}
+import { useServerHealth } from '@/hooks/useServerHealth';
 
 const LandingPage: React.FC = () => {
     const navigate = useNavigate();
     const { isAuthenticated } = useAuth();
-    const serverStatus = useServerStatus();
+    const { status: serverStatus } = useServerHealth();
 
     const handleCTA = () => navigate(isAuthenticated ? '/upload' : '/auth');
 
@@ -38,7 +18,7 @@ const LandingPage: React.FC = () => {
                 <div className="flex items-center gap-4 mb-8">
                     <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full">
                         <Icon name="verified_user" size="sm" filled className="text-primary" />
-                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">Zero Retention Guarantee</span>
+                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">Auto-Delete in 2 Hours</span>
                     </div>
                     <div className="inline-flex items-center gap-2 glass-badge px-3 py-2 rounded-full">
                         {serverStatus === 'live' ? (
@@ -74,13 +54,13 @@ const LandingPage: React.FC = () => {
 
                 <p className="text-on-surface-variant text-lg sm:text-xl max-w-2xl mb-12 leading-relaxed">
                     Upload any legal contract. Get instant risk scoring, clause extraction, and plain-English explanations.
-                    Everything runs in-memory — nothing is ever stored.
+                    PII is anonymized before any AI call, and documents are auto-deleted after your session expires.
                 </p>
 
                 <div className="flex flex-col sm:flex-row items-center gap-4 mb-16">
                     <button
                         onClick={handleCTA}
-                        className="px-8 py-4 bg-gradient-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98] text-base"
+                        className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98] text-base"
                     >
                         Analyze a Document
                     </button>
@@ -168,7 +148,7 @@ const LandingPage: React.FC = () => {
                     <p className="text-[10px] text-muted-foreground/70 font-mono leading-relaxed">
                         Legal Assist is an AI-powered tool for informational purposes only. It does not provide legal advice.
                         Always consult a qualified legal professional before making decisions based on any analysis.
-                        All documents are processed in-memory and automatically deleted after your session expires.
+                        Documents are automatically deleted after your session expires (2 hours).
                     </p>
                 </div>
             </section>
@@ -180,7 +160,7 @@ const LandingPage: React.FC = () => {
                     <p className="text-on-surface-variant">Upload your first document in under 150 seconds*. No credit card required.</p>
                     <button
                         onClick={handleCTA}
-                        className="px-8 py-4 bg-gradient-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98]"
+                        className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98]"
                     >
                         Get Started Free
                     </button>
