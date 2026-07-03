@@ -251,8 +251,12 @@ Starts the full local stack: frontend (port 80), API (port 8000), worker, MongoD
 
 The repo has two branches that matter for deployment:
 
-- **`main`** — the real backend + frontend. Its `backend/Dockerfile` builds the API. This is what GitHub tracks and what the API's Hugging Face Space deploys from.
-- **`worker`** — a branch dedicated to the worker Space. Its `backend/Dockerfile` is a different file (the worker build — installs `requirements-worker.txt`, runs `worker_entry.py` instead of `uvicorn`) and its `backend/README.md` carries the worker Space's title/frontmatter. Everything else in `backend/app/` is identical to `main` — this branch exists purely so each Space's `Dockerfile` can have the same filename (`Dockerfile`, which is the only name Hugging Face Docker Spaces will build) while pointing at different content.
+- **`main`** — the real backend + frontend. Its `backend/Dockerfile` builds the API. This is the only branch pushed to GitHub, and what the API's Hugging Face Space deploys from.
+- **`worker`** — a **local-only** branch dedicated to the worker Space; it is never pushed to GitHub. Its `backend/Dockerfile` is a different file (the worker build — installs `requirements-worker.txt`, runs `worker_entry.py` instead of `uvicorn`) and its `backend/README.md` carries the worker Space's title/frontmatter. Everything else in `backend/app/` is identical to `main` — this branch exists purely so each Space's `Dockerfile` can have the same filename (`Dockerfile`, the only name Hugging Face Docker Spaces will build) while pointing at different content.
+
+Hugging Face itself has no concept of "branches" shared with this repo — `la-space` and `la-space-worker` are each an independent git repo with their own single `main`. `git subtree push ... worker:main` just means "push my local `worker` branch's content *as* that remote's `main`" — the name `worker` is local convenience only, not something HF sees or needs.
+
+If the `worker` branch is ever lost (e.g. a fresh clone on a new machine), recreate it once: branch off `main`, swap in the worker `Dockerfile`/`README.md` content, commit. See [Deploying to Hugging Face](#deploying-to-hugging-face-two-spaces) below for what that content should be.
 
 Normal day-to-day workflow — commit on `main`, push to GitHub:
 
