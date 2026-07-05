@@ -1,7 +1,7 @@
 """
 Embedding Service for semantic HTOC boost.
 
-Uses Gemini text-embedding-004 via the google-genai SDK (already installed).
+Uses Gemini gemini-embedding-001 via the google-genai SDK (already installed).
 Replaces the token-overlap boost in BM25SearchService with cosine similarity,
 so queries like "counterparty responsibilities" match "Party Obligations" sections.
 
@@ -18,7 +18,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "text-embedding-004"
+EMBEDDING_MODEL = "gemini-embedding-001"
 BATCH_SIZE = 100
 
 
@@ -28,7 +28,7 @@ def _get_client() -> genai.Client:
 
 async def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
     """
-    Embed a list of texts using Gemini text-embedding-004.
+    Embed a list of texts using Gemini gemini-embedding-001.
     Returns a list of float vectors (same length as input).
     Returns None for any text that fails to embed.
     """

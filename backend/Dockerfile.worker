@@ -10,11 +10,21 @@ RUN apt-get update && apt-get install -y \
 COPY requirements-worker.txt .
 RUN pip install --no-cache-dir -r requirements-worker.txt
 
+# Pre-download EasyOCR models at build time — the container has no persistent
+# storage, so without this every cold start re-downloads the detector +
+# recognition models from scratch (minutes of delay on first OCR job).
+# Covers en + hi (most common case per _LANG_MAP); other languages still
+# download lazily on first use of that language.
+RUN python -c "import easyocr; easyocr.Reader(['hi', 'en'], gpu=False)"
+
 COPY ./app ./app
 
 # Add a non-root user for security
-RUN useradd -m appuser && chown -R appuser:appuser /app
+RUN useradd -m appuser && chown -R appuser:appuser /app \
+    && cp -r /root/.EasyOCR /home/appuser/.EasyOCR \
+    && chown -R appuser:appuser /home/appuser/.EasyOCR
 USER appuser
+ENV HOME=/home/appuser
 
 ENV PORT=7860
 EXPOSE 7860
