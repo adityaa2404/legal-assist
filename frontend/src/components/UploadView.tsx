@@ -163,23 +163,22 @@ const UploadView: React.FC = () => {
                     // Non-critical — viewer just won't show the PDF
                 }
 
-                // Poll for text extraction + PII
+                // Poll until HTOC/BM25 build finishes (or fails) so /analyze never
+                // saves history with a not-yet-built htoc_tree.
                 const start = Date.now();
-                let textDone = false;
-                while (Date.now() - start < 2400000 && !textDone) {
+                let ready = false;
+                while (Date.now() - start < 2400000 && !ready) {
                     if (cancelledRef.current) return;
                     try {
                         const status = await pollStatus(sessionData.session_id);
-                        if (status.has_text || status.status === 'building' || status.status === 'ready') {
-                            textDone = true;
-                        } else if (status.status === 'failed') {
-                            throw new Error('Document processing failed.');
+                        if (status.status === 'ready' || status.status === 'failed') {
+                            ready = true;
                         }
-                    } catch (err: any) { if (err.message?.includes('failed')) throw err; }
-                    if (!textDone) await new Promise(r => setTimeout(r, 3000));
+                    } catch { /* transient poll error — keep retrying until timeout */ }
+                    if (!ready) await new Promise(r => setTimeout(r, 2000));
                 }
                 if (cancelledRef.current) return;
-                if (!textDone) throw new Error('Document processing timed out');
+                if (!ready) throw new Error('Document processing timed out');
 
                 // PII done
                 advanceStage(1);
@@ -269,25 +268,25 @@ const UploadView: React.FC = () => {
             });
             setFileUrl(URL.createObjectURL(file));
 
-            // Poll for text extraction + PII (scanned OCR or large digital docs)
-            if (sessionData.htoc_status === 'processing') {
+            // Poll until HTOC/BM25 build finishes (or fails) so /analyze never
+            // saves history with a not-yet-built htoc_tree — applies to every
+            // path (small digital docs build HTOC inline too, just faster).
+            {
                 const start = Date.now();
                 const processingTimeout = 2400000; // 40 min
-                let textDone = false;
-                while (Date.now() - start < processingTimeout && !textDone) {
+                let ready = false;
+                while (Date.now() - start < processingTimeout && !ready) {
                     if (cancelledRef.current) return;
                     try {
                         const status = await pollStatus(sessionData.session_id);
-                        if (status.has_text || status.status === 'building' || status.status === 'ready') {
-                            textDone = true;
-                        } else if (status.status === 'failed') {
-                            throw new Error('Document processing failed.');
+                        if (status.status === 'ready' || status.status === 'failed') {
+                            ready = true;
                         }
-                    } catch (err: any) { if (err.message?.includes('failed')) throw err; }
-                    if (!textDone) await new Promise(r => setTimeout(r, 3000));
+                    } catch { /* transient poll error — keep retrying until timeout */ }
+                    if (!ready) await new Promise(r => setTimeout(r, 2000));
                 }
                 if (cancelledRef.current) return;
-                if (!textDone) throw new Error('Document processing timed out');
+                if (!ready) throw new Error('Document processing timed out');
             }
 
             // AI Analysis stage
