@@ -15,39 +15,6 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-
-async def _embed_htoc_nodes(tree: Dict[str, Any]) -> None:
-    """
-    Walk the HTOC tree and embed each node's title+summary in-place.
-    Used by BM25SearchService for semantic boosting instead of token overlap.
-    Runs after tree is built. Failure is non-fatal — nodes just lack embeddings.
-    """
-    try:
-        from app.services.embedding_service import embed_texts
-
-        # Collect all nodes in order
-        nodes: List[Dict[str, Any]] = []
-
-        def _collect(node: Dict[str, Any]):
-            nodes.append(node)
-            for child in node.get("children", []):
-                _collect(child)
-
-        _collect(tree)
-
-        # Build texts to embed: title + summary
-        texts = [f"{n.get('title', '')} {n.get('summary', '')}".strip() for n in nodes]
-        embeddings = await embed_texts(texts)
-
-        for node, emb in zip(nodes, embeddings):
-            if emb is not None:
-                node["embedding"] = emb
-
-        embedded_count = sum(1 for e in embeddings if e is not None)
-        logger.info("Embedded %d/%d HTOC nodes", embedded_count, len(nodes))
-    except Exception as e:
-        logger.warning("HTOC node embedding failed (non-fatal, will use token overlap boost): %s", e)
-
 # Max pages to include in a single HTOC building prompt
 MAX_PAGES_PER_PROMPT = 100
 # Max chars per page preview in the prompt
@@ -107,8 +74,6 @@ class HTOCBuilder:
         else:
             tree = await self._build_tree_chunked(page_texts, gemini_client, ai_provider)
 
-        # Embed node summaries for semantic boost in BM25 (non-fatal if embedding API is unavailable)
-        await _embed_htoc_nodes(tree)
         return tree
 
     async def _build_tree_single(

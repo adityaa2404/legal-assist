@@ -64,7 +64,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
         userIsScrolledUp.current = scrollHeight - scrollTop - clientHeight > 80;
     }, []);
 
-    // When a NEW assistant message appears, scroll its top into view
+    // When a NEW assistant message appears, scroll its top into view and
+    // suppress bottom-following for the rest of this response's stream —
+    // otherwise the "follow to bottom" effect below immediately overrides
+    // this and the user lands at the bottom instead of the top of the reply.
+    const suppressFollowRef = useRef(false);
     useEffect(() => {
         const count = messages.length;
         const prev = prevMsgCountRef.current;
@@ -73,6 +77,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
         if (count > prev && count >= 2 && messages[count - 1]?.role === 'assistant') {
             // New assistant message just started — scroll to its top
             userIsScrolledUp.current = false;
+            suppressFollowRef.current = true;
             requestAnimationFrame(() => {
                 lastAssistantRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             });
@@ -80,8 +85,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
     }, [messages.length]);
 
     // During streaming, gently follow content — only if user hasn't scrolled up
+    // and we're not still settling into the "scroll to top" position above.
     useEffect(() => {
         if (!isStreaming || userIsScrolledUp.current || !scrollRef.current) return;
+        if (suppressFollowRef.current) {
+            suppressFollowRef.current = false;
+            return;
+        }
         const el = scrollRef.current;
         el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     }, [isStreaming, messages]);

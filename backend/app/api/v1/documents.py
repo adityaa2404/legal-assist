@@ -434,7 +434,7 @@ async def get_htoc_tree(
         session_id=session_id,
         filename=session.document_metadata.get("filename", "unknown"),
         total_nodes=_count_nodes(session.htoc_tree),
-        tree=session.htoc_tree,
+        tree=_strip_embeddings(session.htoc_tree),
         htoc_status=status,
     )
 
@@ -465,6 +465,17 @@ def _count_nodes(node: dict, depth: int = 0, max_depth: int = 50) -> int:
     for child in node.get("children", []):
         count += _count_nodes(child, depth + 1, max_depth)
     return count
+
+
+def _strip_embeddings(node: dict, depth: int = 0, max_depth: int = 50) -> dict:
+    """Strip any leftover `embedding` field from pre-existing sessions built before embedding generation was removed."""
+    if depth >= max_depth:
+        return node
+    stripped = {k: v for k, v in node.items() if k != "embedding"}
+    stripped["children"] = [
+        _strip_embeddings(child, depth + 1, max_depth) for child in node.get("children", [])
+    ]
+    return stripped
 
 
 # ──────────────────────────────────────────────────────────────────────
