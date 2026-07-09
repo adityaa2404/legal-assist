@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # SESSION config
     SESSION_SECRET: str = secrets.token_urlsafe(64)
-    SESSION_TTL_SECONDS: int = 7200  # 2 hours
+    SESSION_TTL_SECONDS: int = 31536000  # 365 days
     ALLOWED_EXTENSIONS: List[str] = ["pdf", "docx"]
     MAX_FILE_SIZE_MB: int = 15  # MongoDB BSON document cap is 16MB — document_files.pdf_bytes must fit under it
 

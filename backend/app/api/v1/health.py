@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.core.redis import get_worker_heartbeat_age_seconds, is_worker_healthy
+from app.core.redis import is_worker_healthy
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,6 @@ class HealthResponse(BaseModel):
     status: str
     api_status: str
     worker_status: str
-    worker_heartbeat_age_seconds: float | None = None
 
 
 async def _ping_worker_to_wake_it() -> None:
@@ -42,7 +41,6 @@ async def _ping_worker_to_wake_it() -> None:
 
 @router.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health_check():
-    worker_heartbeat_age_seconds = get_worker_heartbeat_age_seconds()
     worker_status = "healthy" if is_worker_healthy() else "starting"
     status = "ok" if worker_status == "healthy" else "waking"
 
@@ -56,5 +54,4 @@ async def health_check():
         "status": status,
         "api_status": "ok",
         "worker_status": worker_status,
-        "worker_heartbeat_age_seconds": worker_heartbeat_age_seconds,
     }

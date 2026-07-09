@@ -215,7 +215,7 @@ Only one worker process can run at a time against a given checkout — `worker_e
 
 ```bash
 curl http://localhost:8000/api/v1/health
-# {"status":"ok","api_status":"ok","worker_status":"healthy","worker_heartbeat_age_seconds":...}
+# {"status":"ok","api_status":"ok","worker_status":"healthy"}
 ```
 
 **5. Frontend** (terminal 3)

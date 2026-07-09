@@ -196,7 +196,7 @@ const ImageCapturePage: React.FC = () => {
                     )}
 
                     <p className="text-[11px] text-muted-foreground text-center font-mono">
-                        PDF will be viewable for 2 hours, then auto-deleted per our zero-retention policy
+                        PDF will be viewable until your session expires, then auto-deleted per our zero-retention policy
                     </p>
                 </div>
 

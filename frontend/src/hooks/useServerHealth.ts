@@ -7,7 +7,6 @@ export interface ServerHealthInfo {
     status: ServerHealth;
     apiStatus: string;
     workerStatus: string;
-    workerHeartbeatAgeSeconds: number | null;
 }
 
 // Require this many consecutive non-ok checks before reporting "waking" —
@@ -20,7 +19,6 @@ export function useServerHealth(): ServerHealthInfo {
         status: 'checking',
         apiStatus: 'unknown',
         workerStatus: 'unknown',
-        workerHeartbeatAgeSeconds: null,
     });
 
     useEffect(() => {
@@ -41,7 +39,6 @@ export function useServerHealth(): ServerHealthInfo {
                                 : 'live',
                         apiStatus: data.api_status || 'ok',
                         workerStatus: data.worker_status || 'unknown',
-                        workerHeartbeatAgeSeconds: data.worker_heartbeat_age_seconds ?? null,
                     }));
                 })
                 .catch(() => {
@@ -53,7 +50,6 @@ export function useServerHealth(): ServerHealthInfo {
                             : 'live',
                         apiStatus: 'down',
                         workerStatus: 'unknown',
-                        workerHeartbeatAgeSeconds: null,
                     }));
                 });
         };

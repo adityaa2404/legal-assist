@@ -352,7 +352,7 @@ const UploadView: React.FC = () => {
             <div className="mb-16 text-center">
                 <div className="inline-flex items-center space-x-2 glass-badge px-4 py-1.5 rounded-full mb-6">
                     <Icon name="verified_user" size="sm" filled className="text-primary" />
-                    <span className="text-[11px] font-bold tracking-widest uppercase text-primary">Auto-Delete After 2 Hours</span>
+                    <span className="text-[11px] font-bold tracking-widest uppercase text-primary">Auto-Delete Enabled</span>
                 </div>
                 <h1 className="font-headline text-5xl md:text-6xl font-extrabold tracking-tight text-on-surface mb-4">
                     Analyze Legal Documents.

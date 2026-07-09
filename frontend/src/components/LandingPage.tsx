@@ -8,8 +8,12 @@ const LandingPage: React.FC = () => {
     const navigate = useNavigate();
     const { isAuthenticated } = useAuth();
     const { status: serverStatus } = useServerHealth();
+    const isWaking = serverStatus === 'waking';
 
-    const handleCTA = () => navigate(isAuthenticated ? '/upload' : '/auth');
+    const handleCTA = () => {
+        if (isWaking) return;
+        navigate(isAuthenticated ? '/upload' : '/auth');
+    };
 
     return (
         <div className="min-h-screen flex flex-col">
@@ -18,7 +22,7 @@ const LandingPage: React.FC = () => {
                 <div className="flex items-center gap-4 mb-8">
                     <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full">
                         <Icon name="verified_user" size="sm" filled className="text-primary" />
-                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">Auto-Delete in 2 Hours</span>
+                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">Auto-Delete Enabled</span>
                     </div>
                     <div className="inline-flex items-center gap-2 glass-badge px-3 py-2 rounded-full">
                         {serverStatus === 'live' ? (
@@ -57,17 +61,25 @@ const LandingPage: React.FC = () => {
                     PII is anonymized before any AI call, and documents are auto-deleted after your session expires.
                 </p>
 
-                <div className="flex flex-col sm:flex-row items-center gap-4 mb-16">
-                    <button
-                        onClick={handleCTA}
-                        className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98] text-base"
-                    >
-                        Analyze a Document
-                    </button>
-                    <a href="#features" className="text-sm font-bold text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1">
-                        Learn more
-                        <Icon name="arrow_downward" size="sm" />
-                    </a>
+                <div className="flex flex-col items-center gap-3 mb-16">
+                    <div className="flex flex-col sm:flex-row items-center gap-4">
+                        <button
+                            onClick={handleCTA}
+                            disabled={isWaking}
+                            className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98] text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-lg"
+                        >
+                            Analyze a Document
+                        </button>
+                        <a href="#features" className="text-sm font-bold text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1">
+                            Learn more
+                            <Icon name="arrow_downward" size="sm" />
+                        </a>
+                    </div>
+                    {isWaking && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                            Server is waking up — this can take up to a minute. Please try again shortly.
+                        </p>
+                    )}
                 </div>
 
                 {/* Trust row */}
@@ -148,7 +160,7 @@ const LandingPage: React.FC = () => {
                     <p className="text-[10px] text-muted-foreground/70 font-mono leading-relaxed">
                         Legal Assist is an AI-powered tool for informational purposes only. It does not provide legal advice.
                         Always consult a qualified legal professional before making decisions based on any analysis.
-                        Documents are automatically deleted after your session expires (2 hours).
+                        Documents are automatically deleted after your session expires.
                     </p>
                 </div>
             </section>
@@ -160,10 +172,16 @@ const LandingPage: React.FC = () => {
                     <p className="text-on-surface-variant">Upload your first document in under 150 seconds*. No credit card required.</p>
                     <button
                         onClick={handleCTA}
-                        className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98]"
+                        disabled={isWaking}
+                        className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-lg"
                     >
                         Get Started Free
                     </button>
+                    {isWaking && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                            Server is waking up — this can take up to a minute. Please try again shortly.
+                        </p>
+                    )}
                 </div>
             </section>
         </div>

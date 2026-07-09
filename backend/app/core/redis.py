@@ -26,22 +26,17 @@ def get_redis_client() -> redis.Redis:
     return _client
 
 
-def get_worker_heartbeat_age_seconds() -> float | None:
-    """Return the worker heartbeat age in seconds, or None if unavailable."""
+def is_worker_healthy() -> bool:
+    """Check whether the worker's heartbeat key is present and fresh (single Redis read)."""
     try:
         value = get_redis_client().get(WORKER_HEARTBEAT_KEY)
         if not value:
-            return None
+            return False
 
-        heartbeat_ts = float(value)
         from time import time
 
-        return max(0.0, time() - heartbeat_ts)
+        age = time() - float(value)
+        return 0 <= age <= WORKER_HEARTBEAT_STALE_SECONDS
     except Exception as exc:
         logger.warning("Unable to read worker heartbeat: %s", exc)
-        return None
-
-
-def is_worker_healthy() -> bool:
-    age = get_worker_heartbeat_age_seconds()
-    return age is not None and age <= WORKER_HEARTBEAT_STALE_SECONDS
+        return False

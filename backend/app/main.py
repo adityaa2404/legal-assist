@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.database import create_indexes, close_mongo_connection, get_database
 from app.api.v1.router import api_router
 import os
+import time
 import uvicorn
 import logging
 
@@ -85,6 +86,21 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Session-ID"],
 )
+
+# Log method, path, status code, and latency for every request
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "%s %s %d %.1fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
 
 # Set up Rate Limiter
 app.state.limiter = limiter
