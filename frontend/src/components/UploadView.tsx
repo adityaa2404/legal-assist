@@ -62,6 +62,14 @@ async function pollStatus(sessionId: string): Promise<{ status: string; has_text
     return data;
 }
 
+// 4xx (session expired, unauthorized, etc.) won't resolve by retrying — only
+// network errors and 5xx are worth waiting out.
+function isTransientPollError(err: any): boolean {
+    const status = err?.response?.status;
+    if (!status) return true;
+    return status >= 500;
+}
+
 const UploadView: React.FC = () => {
     const { setSession, setAnalysis, setFileUrl } = useSession();
     const navigate = useNavigate();
@@ -167,18 +175,24 @@ const UploadView: React.FC = () => {
                 // saves history with a not-yet-built htoc_tree.
                 const start = Date.now();
                 let ready = false;
+                let finalStatus: string | null = null;
                 while (Date.now() - start < 2400000 && !ready) {
                     if (cancelledRef.current) return;
                     try {
                         const status = await pollStatus(sessionData.session_id);
                         if (status.status === 'ready' || status.status === 'failed') {
                             ready = true;
+                            finalStatus = status.status;
                         }
-                    } catch { /* transient poll error — keep retrying until timeout */ }
+                    } catch (pollErr: any) {
+                        if (!isTransientPollError(pollErr)) throw pollErr;
+                        // transient poll error — keep retrying until timeout
+                    }
                     if (!ready) await new Promise(r => setTimeout(r, 2000));
                 }
                 if (cancelledRef.current) return;
                 if (!ready) throw new Error('Document processing timed out');
+                if (finalStatus === 'failed') throw new Error('Document processing failed on the server');
 
                 // PII done
                 advanceStage(1);
@@ -275,18 +289,24 @@ const UploadView: React.FC = () => {
                 const start = Date.now();
                 const processingTimeout = 2400000; // 40 min
                 let ready = false;
+                let finalStatus: string | null = null;
                 while (Date.now() - start < processingTimeout && !ready) {
                     if (cancelledRef.current) return;
                     try {
                         const status = await pollStatus(sessionData.session_id);
                         if (status.status === 'ready' || status.status === 'failed') {
                             ready = true;
+                            finalStatus = status.status;
                         }
-                    } catch { /* transient poll error — keep retrying until timeout */ }
+                    } catch (pollErr: any) {
+                        if (!isTransientPollError(pollErr)) throw pollErr;
+                        // transient poll error — keep retrying until timeout
+                    }
                     if (!ready) await new Promise(r => setTimeout(r, 2000));
                 }
                 if (cancelledRef.current) return;
                 if (!ready) throw new Error('Document processing timed out');
+                if (finalStatus === 'failed') throw new Error('Document processing failed on the server');
             }
 
             // AI Analysis stage

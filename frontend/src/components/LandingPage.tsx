@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import Icon from './ui/icon';
@@ -7,11 +7,21 @@ import { useServerHealth } from '@/hooks/useServerHealth';
 const LandingPage: React.FC = () => {
     const navigate = useNavigate();
     const { isAuthenticated } = useAuth();
-    const { status: serverStatus } = useServerHealth();
-    const isWaking = serverStatus === 'waking';
+    const { status: serverStatus, wake } = useServerHealth();
+    const isBusy = serverStatus === 'waking' || serverStatus === 'checking';
+
+    // Best-effort head start: a visitor landing here gives the worker a
+    // chance to be awake by the time they reach the upload gate. Fire once
+    // per mount — RequireWorker is what actually blocks-and-retries.
+    const wokeOnMount = useRef(false);
+    useEffect(() => {
+        if (wokeOnMount.current) return;
+        wokeOnMount.current = true;
+        wake();
+    }, [wake]);
 
     const handleCTA = () => {
-        if (isWaking) return;
+        if (isBusy) return;
         navigate(isAuthenticated ? '/upload' : '/auth');
     };
 
@@ -65,7 +75,7 @@ const LandingPage: React.FC = () => {
                     <div className="flex flex-col sm:flex-row items-center gap-4">
                         <button
                             onClick={handleCTA}
-                            disabled={isWaking}
+                            disabled={isBusy}
                             className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98] text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-lg"
                         >
                             Analyze a Document
@@ -75,9 +85,11 @@ const LandingPage: React.FC = () => {
                             <Icon name="arrow_downward" size="sm" />
                         </a>
                     </div>
-                    {isWaking && (
+                    {isBusy && (
                         <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                            Server is waking up — this can take up to a minute. Please try again shortly.
+                            {serverStatus === 'checking'
+                                ? 'Checking server status…'
+                                : 'Server is waking up — this can take up to a minute. Please try again shortly.'}
                         </p>
                     )}
                 </div>
@@ -172,14 +184,16 @@ const LandingPage: React.FC = () => {
                     <p className="text-on-surface-variant">Upload your first document in under 150 seconds*. No credit card required.</p>
                     <button
                         onClick={handleCTA}
-                        disabled={isWaking}
+                        disabled={isBusy}
                         className="px-8 py-4 bg-linear-to-b from-primary to-primary-container text-primary-foreground font-headline font-bold rounded-lg shadow-lg hover:shadow-xl transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-lg"
                     >
                         Get Started Free
                     </button>
-                    {isWaking && (
+                    {isBusy && (
                         <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                            Server is waking up — this can take up to a minute. Please try again shortly.
+                            {serverStatus === 'checking'
+                                ? 'Checking server status…'
+                                : 'Server is waking up — this can take up to a minute. Please try again shortly.'}
                         </p>
                     )}
                 </div>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import LandingPage from './components/LandingPage';
 import UploadView from './components/UploadView';
@@ -17,7 +17,7 @@ import { useTheme } from './contexts/ThemeContext';
 import { useUser as useClerkUser } from '@clerk/react';
 import Icon from './components/ui/icon';
 import { Logo, LogoIcon } from './components/ui/Logo';
-import { useServerHealth } from './hooks/useServerHealth';
+import { useServerHealth, ServerHealthProvider } from './hooks/useServerHealth';
 
 /* ── Route Guards ── */
 
@@ -296,7 +296,19 @@ const WakingUpNotice: React.FC<{ serverStatus: string; workerStatus: string }> =
 /* Only upload flows need the worker — gate those, leave the rest of the app
    (dashboard, chat, history) usable even if the worker is momentarily napping. */
 const RequireWorker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { status: serverStatus, workerStatus } = useServerHealth();
+  const { status: serverStatus, workerStatus, wake } = useServerHealth();
+
+  // Actively drive the wake while blocked here — the passive /health poll
+  // alone can sit on a stale "unhealthy" cache result for minutes with no
+  // one actually pinging the worker, since arriving here previously relied
+  // on the (now-gated) upload submit to trigger the force-check.
+  useEffect(() => {
+    if (serverStatus === 'live') return;
+    wake();
+    const id = window.setInterval(wake, 20000);
+    return () => window.clearInterval(id);
+  }, [serverStatus, wake]);
+
   if (serverStatus !== 'live') {
     return <WakingUpNotice serverStatus={serverStatus} workerStatus={workerStatus} />;
   }
@@ -307,6 +319,7 @@ const App: React.FC = () => {
   const { isAuthenticated } = useAuth();
 
   return (
+    <ServerHealthProvider>
     <Router>
       <div className="min-h-screen min-h-dvh bg-background text-foreground font-body">
         <Routes>
@@ -401,6 +414,7 @@ const App: React.FC = () => {
         </Routes>
       </div>
     </Router>
+    </ServerHealthProvider>
   );
 };
 

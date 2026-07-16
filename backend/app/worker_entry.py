@@ -87,6 +87,13 @@ if __name__ == "__main__":
         "app.worker.celery_app:celery",
         "worker",
         "--loglevel=info",
+        # Single-worker deployment (PID lock above enforces this) — gossip/mingle
+        # exist to let workers discover and sync with peers, which never happens
+        # here. They were generating a steady stream of PUBLISH commands against
+        # Redis for no benefit.
+        "--without-gossip",
+        "--without-mingle",
+        "--without-heartbeat",
     ]
 
     # Celery prefork is flaky on Windows for this OCR-heavy workload.

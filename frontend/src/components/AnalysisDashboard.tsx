@@ -11,6 +11,7 @@ import {
 } from './ui/dropdown-menu';
 import axiosClient from '@/api/axiosClient';
 import { analysisApi } from '@/api/analysisApi';
+import { useToast } from '@/contexts/ToastContext';
 
 interface ProcessingStats {
     totalTimeMs: number;
@@ -27,6 +28,7 @@ function formatStatTime(ms: number): string {
 
 const AnalysisDashboard: React.FC = () => {
     const { analysis, session, setAnalysis } = useSession();
+    const { toast } = useToast();
     const [downloading, setDownloading] = React.useState(false);
     const [reanalyzing, setReanalyzing] = React.useState(false);
     const [emailModalOpen, setEmailModalOpen] = React.useState(false);
@@ -56,8 +58,8 @@ const AnalysisDashboard: React.FC = () => {
         try {
             const fresh = await analysisApi.analyze(session.session_id, 'full', true);
             setAnalysis(fresh);
-        } catch (err) {
-            console.error('Re-analysis failed:', err);
+        } catch (err: any) {
+            toast(err.response?.data?.detail || 'Re-analysis failed. Please try again.', 'error');
         } finally {
             setReanalyzing(false);
         }
@@ -77,8 +79,8 @@ const AnalysisDashboard: React.FC = () => {
             link.download = `report_${reportType}_${session.session_id.slice(0, 8)}.pdf`;
             link.click();
             window.URL.revokeObjectURL(url);
-        } catch (err) {
-            console.error('Report download failed:', err);
+        } catch (err: any) {
+            toast(err.response?.data?.detail || 'Report download failed. Please try again.', 'error');
         } finally {
             setDownloading(false);
         }

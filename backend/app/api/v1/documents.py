@@ -12,6 +12,7 @@ from app.core.dependencies import (
 )
 from app.core.config import settings
 from app.core.database import get_database
+from app.api.v1.health import get_worker_status
 from bson import Binary
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
@@ -226,6 +227,11 @@ async def upload_document(
     gemini: GeminiClient = Depends(get_gemini_client),
     htoc_builder: HTOCBuilder = Depends(get_htoc_builder),
 ):
+    # Wake the worker Space now — it needs to be up by the time this upload
+    # finishes queuing, and firing it here overlaps the wake with file
+    # validation/reading instead of waiting until the Celery task is queued.
+    asyncio.create_task(get_worker_status(force=True))
+
     # 1. Validate file type
     if file.content_type not in ALLOWED_TYPES:
         raise HTTPException(400, "Only PDF and DOCX supported")
@@ -497,6 +503,8 @@ async def upload_document_images(
     htoc_builder: HTOCBuilder = Depends(get_htoc_builder),
 ):
     """Accept 1-15 images, stitch into a PDF, then process as a scanned document."""
+    asyncio.create_task(get_worker_status(force=True))
+
     if len(images) < 1 or len(images) > MAX_IMAGES:
         raise HTTPException(400, f"Upload between 1 and {MAX_IMAGES} images")
 

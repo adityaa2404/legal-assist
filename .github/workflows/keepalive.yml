@@ -1,0 +1,16 @@
+name: Keep Spaces awake
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping worker Space
+        run: curl -sS -o /dev/null -w "worker: %{http_code}\n" --max-time 30 https://aadityaa2404-la-space-worker.hf.space || true
+
+      - name: Ping API Space
+        run: curl -sS -o /dev/null -w "api: %{http_code}\n" --max-time 30 https://aadityaa2404-la-space.hf.space/api/v1/health || true

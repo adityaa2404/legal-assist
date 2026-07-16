@@ -21,7 +21,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const { isSignedIn, user: clerkUser, isLoaded: clerkLoaded } = useUser();
-    const { signOut } = useClerk();
+    const { signOut, session: clerkSession } = useClerk();
 
     const [localToken, setLocalToken] = useState<string | null>(() => localStorage.getItem('auth_token'));
     const [localUser, setLocalUser] = useState<AuthUser | null>(() => {
@@ -46,9 +46,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const getToken = async (): Promise<string | null> => {
         if (localToken) return localToken;
-        // Always read session fresh from closure — Clerk updates it in place
-        const activeSession = (window as any).Clerk?.session;
-        if (activeSession) return activeSession.getToken();
+        // Use the hook's session rather than window.Clerk directly — window.Clerk
+        // can be undefined for a moment while ClerkProvider is still initializing,
+        // even after isSignedIn/isLoaded report true, which silently dropped the
+        // auth header on early requests.
+        if (clerkSession) return clerkSession.getToken();
         return null;
     };
 

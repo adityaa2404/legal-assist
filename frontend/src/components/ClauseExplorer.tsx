@@ -5,6 +5,7 @@ import Icon from './ui/icon';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from './ui/collapsible';
 import { cn } from '@/lib/utils';
 import axiosClient from '@/api/axiosClient';
+import { useToast } from '@/contexts/ToastContext';
 
 interface ClauseExplorerProps {
     clauses: Clause[];
@@ -22,6 +23,7 @@ const ClauseExplorer: React.FC<ClauseExplorerProps> = ({ clauses }) => {
     const [savingIdx, setSavingIdx] = useState<number | null>(null);
     const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
     const { session } = useSession();
+    const { toast } = useToast();
 
     const handleCopyClause = async (clause: Clause, idx: number) => {
         const text = `${clause.clause_title}\n\n${clause.clause_text}\n\nPlain English: ${clause.plain_english}`;
@@ -54,8 +56,8 @@ const ClauseExplorer: React.FC<ClauseExplorerProps> = ({ clauses }) => {
                 source_filename: session.document_metadata.filename,
             });
             setSavedSet(prev => new Set(prev).add(idx));
-        } catch (err) {
-            console.error('Failed to save clause:', err);
+        } catch (err: any) {
+            toast(err.response?.data?.detail || 'Failed to save clause to library.', 'error');
         } finally {
             setSavingIdx(null);
         }

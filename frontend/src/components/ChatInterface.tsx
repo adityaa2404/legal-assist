@@ -1,59 +1,20 @@
-import React, { useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import { useChat } from '@/hooks/useChat';
 import { useSession } from '@/hooks/useSession';
 import Icon from './ui/icon';
 import Markdown from 'react-markdown';
 import DisclaimerBanner from './DisclaimerBanner';
 
-/** Generate context-aware suggested questions from analysis results */
-function buildSuggestions(analysis: ReturnType<typeof useSession>['analysis']): string[] {
-    if (!analysis) return ['Summarize key risks', 'Find termination period', 'Who are the parties?'];
-
-    const suggestions: string[] = [];
-
-    // Questions about specific risks
-    const highRisks = analysis.risks.filter(r => r.severity === 'high');
-    if (highRisks.length > 0) {
-        suggestions.push(`Explain the "${highRisks[0].risk_title}" risk`);
-    }
-
-    // Questions about parties
-    if (analysis.parties.length >= 2) {
-        const p = typeof analysis.parties[0] === 'string' ? analysis.parties[0] : (analysis.parties[0] as any).name;
-        suggestions.push(`What are ${p}'s obligations?`);
-    }
-
-    // Questions about missing clauses
-    if (analysis.missing_clauses.length > 0) {
-        suggestions.push(`Why is "${analysis.missing_clauses[0]}" missing?`);
-    }
-
-    // Questions about key clauses
-    const critical = analysis.key_clauses.filter(c => c.importance === 'critical');
-    if (critical.length > 0) {
-        suggestions.push(`Explain the "${critical[0].clause_title}" clause`);
-    }
-
-    // Generic but relevant
-    suggestions.push('What is the notice period?');
-    suggestions.push('Summarize all obligations');
-    suggestions.push('What are the termination conditions?');
-
-    // Return first 4 unique suggestions
-    return [...new Set(suggestions)].slice(0, 4);
-}
-
 interface ChatInterfaceProps {
     onNavigateToPage?: (page: number) => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
-    const { session, analysis } = useSession();
+    const { session } = useSession();
     const { messages, sendMessage, isLoading, isStreaming, error } = useChat(session?.session_id || null);
     const inputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const lastAssistantRef = useRef<HTMLDivElement>(null);
-    const suggestions = useMemo(() => buildSuggestions(analysis), [analysis]);
     const prevMsgCountRef = useRef(0);
     const userIsScrolledUp = useRef(false);
 
@@ -103,13 +64,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
         inputRef.current.value = '';
     };
 
-    const handleSuggestion = (q: string) => {
-        if (inputRef.current) {
-            inputRef.current.value = q;
-            handleSubmit({ preventDefault: () => {} } as any);
-        }
-    };
-
     if (!session) {
         return (
             <div className="h-full bg-card rounded-xl border border-border flex items-center justify-center">
@@ -148,17 +102,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
                         <div>
                             <p className="text-base font-medium text-foreground mb-1">Ask anything about this document</p>
                             <p className="text-sm text-muted-foreground">I'll find the relevant sections and explain in plain English.</p>
-                        </div>
-                        <div className="flex flex-wrap gap-2 justify-center pt-2">
-                            {suggestions.map(q => (
-                                <button
-                                    key={q}
-                                    onClick={() => handleSuggestion(q)}
-                                    className="bg-muted border border-border px-4 py-2 rounded-full text-sm font-medium text-foreground hover:bg-primary hover:text-primary-foreground transition-all cursor-pointer"
-                                >
-                                    {q}
-                                </button>
-                            ))}
                         </div>
                     </div>
                 )}
@@ -258,20 +201,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
 
             {/* Input — always pinned at bottom */}
             <div className="shrink-0 p-4 border-t border-border">
-                {messages.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-3">
-                        {suggestions.slice(0, 3).map(q => (
-                            <button
-                                key={q}
-                                onClick={() => handleSuggestion(q)}
-                                className="bg-muted border border-border px-3 py-1.5 rounded-full text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all cursor-pointer"
-                            >
-                                {q}
-                            </button>
-                        ))}
-                    </div>
-                )}
-
                 <form onSubmit={handleSubmit} className="relative">
                     <input
                         ref={inputRef}
