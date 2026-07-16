@@ -4,6 +4,7 @@ httpx
 motor
 pymongo
 google-genai
+openai
 PyMuPDF
 python-docx
 python-jose[cryptography]

@@ -90,7 +90,10 @@ class BM25SearchService:
         # Tokenize each chunk for BM25
         self._chunk_tokens = [_tokenize(c["text"]) for c in self._chunks]
 
-        if self._chunk_tokens:
+        # BM25Okapi divides by average document length internally — an all-empty
+        # corpus (e.g. text extraction returned nothing) makes that average 0
+        # and raises ZeroDivisionError. Skip index construction in that case.
+        if self._chunk_tokens and any(self._chunk_tokens):
             self._index = BM25Okapi(self._chunk_tokens)
 
         # Extract flat node list from HTOC tree for keyword boost

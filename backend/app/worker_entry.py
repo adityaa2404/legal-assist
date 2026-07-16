@@ -2,15 +2,12 @@ import os
 import subprocess
 import sys
 import threading
-import time
 import platform
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from app.core.redis import WORKER_HEARTBEAT_KEY, WORKER_HEARTBEAT_TTL_SECONDS, get_redis_client
 
 LOCK_FILE = Path(__file__).resolve().parent / ".worker.lock"
 
@@ -77,22 +74,10 @@ def start_dummy_server():
     server.serve_forever()
 
 
-def start_heartbeat():
-    """Keep a short-lived worker heartbeat in Redis so the API can gate access."""
-    while True:
-        try:
-            get_redis_client().set(WORKER_HEARTBEAT_KEY, str(time.time()), ex=WORKER_HEARTBEAT_TTL_SECONDS)
-        except Exception:
-            # Redis outages should not kill the worker; the API will mark it unhealthy.
-            pass
-        time.sleep(max(5, WORKER_HEARTBEAT_TTL_SECONDS // 3))
-
-
 if __name__ == "__main__":
     _acquire_worker_lock_or_exit()
 
     threading.Thread(target=start_dummy_server, daemon=True).start()
-    threading.Thread(target=start_heartbeat, daemon=True).start()
 
     celery_args = [
         sys.executable,

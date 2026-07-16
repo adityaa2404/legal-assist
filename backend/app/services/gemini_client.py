@@ -340,7 +340,13 @@ class GeminiClient:
                 raise Exception(f"AI returned empty response (Finish reason: {finish_reason})")
 
             clean_text = self._clean_json_response(response.text)
-            return json.loads(clean_text, strict=False)
+            try:
+                return json.loads(clean_text, strict=False)
+            except json.JSONDecodeError:
+                repaired = self._extract_json_bruteforce(response.text)
+                if repaired is not None:
+                    return repaired
+                raise
 
         except json.JSONDecodeError as e:
             logging.warning("JSON parse failed on first attempt: %s — retrying", e)
@@ -348,7 +354,12 @@ class GeminiClient:
                 response2 = await _retry_on_rate_limit(_call)
                 if response2.text:
                     clean_text2 = self._clean_json_response(response2.text)
-                    return json.loads(clean_text2, strict=False)
+                    try:
+                        return json.loads(clean_text2, strict=False)
+                    except json.JSONDecodeError:
+                        repaired2 = self._extract_json_bruteforce(response2.text)
+                        if repaired2 is not None:
+                            return repaired2
             except Exception:
                 pass
             snippet = response.text[:500] if response and response.text else "NO TEXT"
