@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import LandingPage from './components/LandingPage';
 import UploadView from './components/UploadView';
@@ -17,7 +17,7 @@ import { useTheme } from './contexts/ThemeContext';
 import { useUser as useClerkUser } from '@clerk/react';
 import Icon from './components/ui/icon';
 import { Logo, LogoIcon } from './components/ui/Logo';
-import { useServerHealth, ServerHealthProvider } from './hooks/useServerHealth';
+import { ServerHealthProvider } from './hooks/useServerHealth';
 
 /* ── Route Guards ── */
 
