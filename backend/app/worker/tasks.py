@@ -143,3 +143,57 @@ def build_htoc_bm25(
         logger.error("HTOC/BM25 task failed for session %s: %s", session_id, exc)
         _run(session_service.set_htoc_status(session_id, "failed"))
         raise self.retry(exc=exc)
+
+
+async def _build_report(session_id: str, report_type: str) -> bytes:
+    """
+    Run/fetch the cached analysis, then render it to PDF. Kept out of the API
+    request path — WeasyPrint's HTML->PDF render is CPU-bound enough to stall
+    the async event loop for every other concurrent request on that API
+    process while it runs.
+    """
+    from app.services.pii_anonymizer import PIIAnonymizer
+    from app.services.gemini_client import GeminiClient
+    from app.services.tree_search import TreeSearchService
+    from app.services.session_service import SessionService
+    from app.services.report_generator import create_pdf_from_analysis
+    from app.api.v1.analysis import _get_or_run_analysis
+
+    session_service = SessionService()
+    session = await session_service.get(session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+
+    result = await _get_or_run_analysis(
+        session_id, report_type, session_service,
+        PIIAnonymizer(), GeminiClient(), TreeSearchService(),
+    )
+    filename = (session.document_metadata or {}).get("filename", "document")
+    return create_pdf_from_analysis(result, filename, report_type)
+
+
+@shared_task(
+    bind=True,
+    name="tasks.generate_report",
+    max_retries=2,
+    default_retry_delay=15,
+)
+def generate_report(self, session_id: str, report_type: str):
+    """Build the analysis PDF report and cache it on the session (report_pdf.{type})."""
+    from app.services.session_service import SessionService
+
+    session_service = SessionService()
+
+    async def _run_and_save():
+        pdf_bytes = await _build_report(session_id, report_type)
+        await session_service.save_report(session_id, report_type, pdf_bytes)
+
+    try:
+        _run(_run_and_save())
+    except SoftTimeLimitExceeded:
+        logger.error("Soft time limit exceeded generating report for session %s", session_id)
+        _run(session_service.set_report_status(session_id, report_type, "failed"))
+    except Exception as exc:
+        logger.error("Report generation failed for session %s: %s", session_id, exc)
+        _run(session_service.set_report_status(session_id, report_type, "failed"))
+        raise self.retry(exc=exc)

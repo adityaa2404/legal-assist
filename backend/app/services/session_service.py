@@ -143,5 +143,44 @@ class SessionService:
             return doc["chat_cache"].get(query_hash)
         return None
 
+    async def set_report_status(self, session_id: str, report_type: str, status: str):
+        """Track PDF report generation status (pending/ready/failed) while the
+        Celery worker builds it — mirrors htoc_status for the same reason:
+        WeasyPrint rendering is CPU-heavy enough to not run inline in the API."""
+        await self.collection.update_one(
+            {"session_id": session_id},
+            {"$set": {f"report_status.{report_type}": status}}
+        )
+
+    async def get_report_status(self, session_id: str, report_type: str) -> Optional[str]:
+        doc = await self.collection.find_one(
+            {"session_id": session_id},
+            {f"report_status.{report_type}": 1}
+        )
+        if doc and doc.get("report_status"):
+            return doc["report_status"].get(report_type)
+        return None
+
+    async def save_report(self, session_id: str, report_type: str, pdf_bytes: bytes):
+        """Cache the generated PDF (well under Mongo's 16MB doc cap) so repeat
+        downloads of the same report_type are instant, same idea as cached_analysis."""
+        await self.collection.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                f"report_pdf.{report_type}": pdf_bytes,
+                f"report_status.{report_type}": "ready",
+            }}
+        )
+
+    async def get_report(self, session_id: str, report_type: str) -> Optional[bytes]:
+        doc = await self.collection.find_one(
+            {"session_id": session_id},
+            {f"report_pdf.{report_type}": 1}
+        )
+        if doc and doc.get("report_pdf"):
+            pdf = doc["report_pdf"].get(report_type)
+            return bytes(pdf) if pdf else None
+        return None
+
     async def delete(self, session_id: str):
         await self.collection.delete_one({"session_id": session_id})

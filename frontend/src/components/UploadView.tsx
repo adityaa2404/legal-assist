@@ -3,6 +3,7 @@ import { uploadApi } from '@/api/uploadApi';
 import { analysisApi } from '@/api/analysisApi';
 import axiosClient from '@/api/axiosClient';
 import { useSession } from '@/hooks/useSession';
+import { useServerHealth } from '@/hooks/useServerHealth';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useToast } from '@/contexts/ToastContext';
 import { UploadResponse } from '@/types';
@@ -72,6 +73,7 @@ function isTransientPollError(err: any): boolean {
 
 const UploadView: React.FC = () => {
     const { setSession, setAnalysis, setFileUrl } = useSession();
+    const { workerStatus, wake } = useServerHealth();
     const navigate = useNavigate();
     const location = useLocation();
     const { toast } = useToast();
@@ -91,6 +93,14 @@ const UploadView: React.FC = () => {
 
     const stages = docType === 'scanned' ? SCANNED_STAGES : DIGITAL_STAGES;
     const isProcessing = isUploading || allDone;
+
+    // Give the worker Space a head start waking up while the user is still
+    // picking a file/options — the actual wake trigger on submit (server-side,
+    // documents.py) overlaps with validation, but this shaves off a bit more.
+    useEffect(() => {
+        wake();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Live timer tick — 100ms interval while processing
     useEffect(() => {
@@ -623,6 +633,18 @@ const UploadView: React.FC = () => {
                                 {allDone ? 'COMPLETE' : isProcessing ? 'PROCESSING' : 'READY'}
                             </span>
                         </div>
+
+                        {/* Cold-start notice — worker Space sleeps when idle to save cost;
+                            first request after a while can take up to ~a minute to spin up. */}
+                        {isProcessing && !allDone && workerStatus !== 'healthy' && (
+                            <div className="mb-5 flex items-start gap-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 px-4 py-3 animate-fade-in">
+                                <span className="material-symbols-outlined text-[16px] text-amber-600 dark:text-amber-400 mt-0.5">bedtime</span>
+                                <p className="text-[12px] leading-relaxed text-amber-700 dark:text-amber-300">
+                                    Waking up the processing engine — it sleeps when idle to save resources.
+                                    This first step can take up to a minute longer than usual; it won't happen again for a while.
+                                </p>
+                            </div>
+                        )}
 
                         <div className="space-y-1">
                             {stages.map((stage, idx) => {

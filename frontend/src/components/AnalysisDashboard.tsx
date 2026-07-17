@@ -31,9 +31,6 @@ const AnalysisDashboard: React.FC = () => {
     const { toast } = useToast();
     const [downloading, setDownloading] = React.useState(false);
     const [reanalyzing, setReanalyzing] = React.useState(false);
-    const [emailModalOpen, setEmailModalOpen] = React.useState(false);
-    const [emailAddress, setEmailAddress] = React.useState('');
-    const [emailStatus, setEmailStatus] = React.useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
     const [processingStats, setProcessingStats] = React.useState<ProcessingStats | null>(() => {
         try {
             const stored = sessionStorage.getItem('lawbuddy_processing_stats');
@@ -69,8 +66,29 @@ const AnalysisDashboard: React.FC = () => {
         if (!session) return;
         setDownloading(true);
         try {
-            const response = await axiosClient.get(`/analyze/report?analysis_type=${reportType}`, {
-                headers: { 'X-Session-ID': session.session_id },
+            const headers = { 'X-Session-ID': session.session_id };
+
+            // PDF rendering now happens on the Celery worker (was blocking the
+            // API's event loop inline) — kick it off, then poll until ready.
+            const { data: gen } = await axiosClient.post(
+                `/analyze/report/generate?analysis_type=${reportType}`, {}, { headers }
+            );
+
+            let status = gen.status;
+            const deadline = Date.now() + 90_000; // WeasyPrint render is seconds, not minutes
+            while (status === 'pending' && Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 1500));
+                const { data: poll } = await axiosClient.get(
+                    `/analyze/report/status?analysis_type=${reportType}`, { headers }
+                );
+                status = poll.status;
+            }
+            if (status !== 'ready') {
+                throw new Error('Report generation timed out. Please try again.');
+            }
+
+            const response = await axiosClient.get(`/analyze/report/download?analysis_type=${reportType}`, {
+                headers,
                 responseType: 'blob',
             });
             const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -80,27 +98,9 @@ const AnalysisDashboard: React.FC = () => {
             link.click();
             window.URL.revokeObjectURL(url);
         } catch (err: any) {
-            toast(err.response?.data?.detail || 'Report download failed. Please try again.', 'error');
+            toast(err.response?.data?.detail || err.message || 'Report download failed. Please try again.', 'error');
         } finally {
             setDownloading(false);
-        }
-    };
-
-    const handleEmailReport = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!session || !emailAddress.trim()) return;
-        setEmailStatus('sending');
-        try {
-            await axiosClient.post('/analyze/email', {
-                email: emailAddress,
-                report_type: 'full',
-            }, {
-                headers: { 'X-Session-ID': session.session_id },
-            });
-            setEmailStatus('sent');
-            setTimeout(() => { setEmailModalOpen(false); setEmailStatus('idle'); setEmailAddress(''); }, 2000);
-        } catch {
-            setEmailStatus('error');
         }
     };
 
@@ -258,11 +258,6 @@ const AnalysisDashboard: React.FC = () => {
                             <Icon name="summarize" size="sm" className="mr-2" />
                             Summary Report
                         </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => setEmailModalOpen(true)}>
-                            <Icon name="email" size="sm" className="mr-2" />
-                            Email Report
-                        </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
                 </div>
@@ -414,55 +409,6 @@ const AnalysisDashboard: React.FC = () => {
                 </div>
             )}
 
-            {/* Email Report Modal */}
-            {emailModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fade-in" onClick={() => setEmailModalOpen(false)}>
-                    <div className="bg-card rounded-xl border border-border p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center gap-3 mb-4">
-                            <Icon name="email" className="text-primary" />
-                            <h3 className="font-bold text-lg">Email Report</h3>
-                        </div>
-                        <form onSubmit={handleEmailReport} className="space-y-4">
-                            <div>
-                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block mb-1.5">
-                                    Recipient Email
-                                </label>
-                                <input
-                                    type="email"
-                                    value={emailAddress}
-                                    onChange={e => setEmailAddress(e.target.value)}
-                                    placeholder="name@example.com"
-                                    required
-                                    className="w-full bg-muted border border-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                                />
-                            </div>
-                            <div className="flex items-center justify-end gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => { setEmailModalOpen(false); setEmailStatus('idle'); }}
-                                    className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={emailStatus === 'sending' || emailStatus === 'sent'}
-                                    className="bg-primary text-primary-foreground px-5 py-2 rounded-md text-sm font-bold flex items-center gap-2 hover:opacity-90 transition-all disabled:opacity-50"
-                                >
-                                    {emailStatus === 'sending' && <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>}
-                                    {emailStatus === 'idle' && 'Send Report'}
-                                    {emailStatus === 'sending' && 'Sending...'}
-                                    {emailStatus === 'sent' && 'Sent!'}
-                                    {emailStatus === 'error' && 'Failed — Retry'}
-                                </button>
-                            </div>
-                            {emailStatus === 'error' && (
-                                <p className="text-xs text-destructive">Failed to send. Check if email is configured on the server.</p>
-                            )}
-                        </form>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

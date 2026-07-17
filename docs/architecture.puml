@@ -6,78 +6,122 @@ skinparam defaultFontName Inter
 skinparam defaultFontSize 11
 skinparam shadowing false
 skinparam roundCorner 8
-skinparam nodesep 30
-skinparam ranksep 30
+skinparam nodesep 22
+skinparam ranksep 22
 skinparam padding 4
 
-title **Legal Assist** — System Architecture\n
+title **Legal Assist** — System Architecture\n//split frontend / API / worker deployment//
 
 ' ═══════════ TOP ROW: CLIENT ═══════════
 actor "User" as U #E0F2FE
 
-rectangle "**React 19 Frontend**" as FE #DBEAFE {
+rectangle "**React 19 Frontend**\n(Vercel)" as FE #DBEAFE {
     card "Upload\nDrag & Drop" as Upload
     card "Image\nCapture" as Capture
     card "Dashboard\nChat | Reports" as Dash
 }
 
-' ═══════════ MIDDLE: BACKEND ═══════════
-rectangle "**FastAPI Backend**" as BE #E8F5E9 {
+cloud "**Clerk**\nJWT (RS256/JWKS)" as Clerk #F3E8FF
 
-    card "JWT Auth\nbcrypt | Rate Limit" as Auth
+' ═══════════ MIDDLE: BACKEND API ═══════════
+rectangle "**FastAPI Backend**\nHF Space 'la-space' (main branch)" as BE #E8F5E9 {
+
+    card "Auth\nClerk RS256 or\nlocal HS256 JWT" as Auth
 
     rectangle "OCR Engine" as OCR #F5F5F5 {
-        card "PyMuPDF\n//digital//" as PyMu
-        card "Gemini Vision\n//fast mode//" as GVision #FFF8E1
-        card "EasyOCR\n//secure mode//\n13+ Indian langs" as EasyOCR #C8E6C9
+        card "PyMuPDF\n//digital, <50 chars/pg = scanned//" as PyMu
+        card "Gemini Vision\n//fast mode, batched 5//" as GVision #FFF8E1
+        card "EasyOCR\n//secure mode, local//" as EasyOCR #C8E6C9
     }
 
-    card "**PII Anonymizer**\nPresidio · 16 patterns\nSingle-pass O(n)" as PII #FFEBEE
+    card "**PII Anonymizer**\nPresidio · 15 regex patterns\nfail-open, no spaCy at runtime" as PII #FFEBEE
 
     rectangle "Retrieval + AI" as RAG #FFFDE7 {
-        card "HTOC\nTree" as HTOC
-        card "BM25\nIndex" as BM25
-        card "Analysis\nClauses · Risks" as Ana
-        card "Chat\nSSE Stream" as Chat
+
+        card "**HTOC Tree**\nbuilt **ONCE** at upload\n(1 Gemini call, stored on session)" as HTOC #FDE68A
+        card "**BM25 Index**\nbuilt **ONCE** at upload\n(local, no LLM)" as BM25Idx #FDE68A
+
+        card "Analysis\nClauses · Risks · Score" as Ana
+
+        rectangle "**Chat — runs on EVERY question**" as ChatFlow #FCE7F3 {
+            card "① Query Understanding\n1 Gemini call →\nintent + expanded_query + key_terms" as QU
+            card "② Tier 1: BM25 search\nover the BM25 Index above\nlocal, ~5ms" as T1
+            card "③ Tier 2: HTOC search\nsearches the HTOC Tree above\n(only if Tier 1 = low AND tree exists)" as T2 #FEF3C7
+            card "④ Tier 3: full text\n(only if no index\nexists yet at all)" as T3 #FEE2E2
+
+            QU --> T1
+            T1 --> T2 : low confidence,\ntree ready
+            T1 --> T3 : no index\nat all yet
+            note bottom of T2
+                If this call fails, keep the
+                Tier 1 result — never falls
+                through to ④ full text.
+            end note
+        }
     }
 }
 
-' ═══════════ BOTTOM: EXTERNAL ═══════════
-database "**MongoDB**\nSessions (TTL 2h)\nUsers · History" as DB #FEE2E2
-cloud "**Gemini 2.5 Flash**\n3 API keys" as Gemini #FEF3C7
+' ═══════════ WORKER (SEPARATE DEPLOY) ═══════════
+rectangle "**Celery Worker**\nHF Space 'la-space-worker' (worker branch)" as Worker #E1F5FE {
+    card "process_document\nOCR + PII + HTOC + BM25" as TaskProc
+    card "build_htoc_bm25\nHTOC + BM25 only" as TaskHtoc
+}
 
-' ═══════════ CLEAN CONNECTIONS ═══════════
+' ═══════════ QUEUE ═══════════
+queue "**Redis**\n(Upstash)\nCelery broker + results\nhealth-check cache" as Redis #FCE4EC
+
+' ═══════════ BOTTOM: EXTERNAL ═══════════
+database "**MongoDB Atlas**\nSessions (TTL) · Users\nRaw PDF bytes (≤15MB)\nAnalysis + chat cache" as DB #FEE2E2
+
+cloud "**LLM fallback chain**\nGemini 2.5 Flash (primary, 3 keys)\n→ Groq Llama 3.3 70B\n→ OpenAI gpt-4o-mini\n→ Claude" as LLM #FEF3C7
+
+cloud "**GitHub Actions**\nkeepalive.yml every 15min\npings both HF Spaces /health" as GHA #EDE7F6
+
+' ═══════════ CONNECTIONS ═══════════
 
 U --> FE
+FE --> Clerk : session token
+FE --> Auth : bearer token\n(axios, SSE)
 
 Upload --> Auth
 Capture --> Auth
 Dash --> Auth
 
-Auth --> OCR : route by\ndoc type
+Auth --> Clerk : verify JWKS
+Auth --> OCR : small/digital\n(inline)
 Auth --> RAG
+Auth --> DB : sessions, PDF bytes
 
 OCR --> PII : extracted text
 PII --> RAG : anonymized text
 
-' OCR to Gemini
-GVision --> Gemini : page images
+Auth --> Redis : enqueue\n(scanned / large-digital)
+Redis --> Worker : dequeue
+Worker --> TaskProc
+Worker --> TaskHtoc
+TaskProc --> DB : fetch bytes,\nwrite results
+TaskHtoc --> DB
+Worker --> Redis : status/result
 
-' RAG to externals
-HTOC --> Gemini
-Ana --> Gemini
-Chat --> Gemini
-Chat --> BM25
+GVision --> LLM : page images (OCR)
+RAG --> LLM : HTOC build (once) · analysis ·\nquery understanding · tier-2 search ·\nfinal chat answer (SSE)
 
-RAG --> DB : cache
-Auth --> DB : sessions
+RAG --> DB : cache analysis/chat
+
+GHA --> BE : /health
+GHA --> Worker : /health
 
 ' ═══════════ LEGEND ═══════════
 legend bottom
-  | Mode | OCR Engine | API Calls | Privacy |
-  | **Digital** | PyMuPDF | None (local) | Text never leaves server |
-  | **Scanned Fast** | Gemini Vision | Yes (batched 5/req) | Images sent to Gemini |
-  | **Scanned Secure** | EasyOCR (local) | None | Nothing leaves server |
+  | Mode | OCR Engine | API Calls | Privacy | Runs where |
+  | **Digital, small** | PyMuPDF | None (local) | Text never leaves server | Inline in API |
+  | **Digital, large** | PyMuPDF | None (local) | Text never leaves server | Backgrounded on Worker |
+  | **Scanned, fast** | Gemini Vision | Yes (batched 5/req) | Images sent to Gemini | Backgrounded on Worker |
+  | **Scanned, secure** | EasyOCR (local) | None | Nothing leaves server | Backgrounded on Worker |
+  --
+  **Chat retrieval, per question:** ① understand query → ② BM25 (local) → if low confidence,
+  ③ search the already-built HTOC tree → if that also fails, keep the Tier-1 BM25 result (never
+  falls to full text). ④ full text is ONLY used when no BM25 index exists yet at all.
 end legend
 
 @enduml

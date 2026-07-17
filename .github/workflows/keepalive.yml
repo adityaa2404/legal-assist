@@ -9,10 +9,11 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping worker Space
-        run: |
-          curl -sS -o /dev/null -w "worker: %{http_code}\n" --max-time 30 https://aadityaa2404-la-space-worker.hf.space || true
-
+      # Worker Space is deliberately NOT pinged here — keeping it awake 24/7 kept
+      # Celery's Redis BRPOP broker loop running nonstop (~1/sec), burning through
+      # Upstash's command quota for zero real work. The worker wakes itself on
+      # demand instead — see documents.py's upload endpoint, which fires an async
+      # wake the moment an upload starts, well before the job is queued.
       - name: Ping API Space
         run: |
           curl -sS -o /dev/null -w "api: %{http_code}\n" --max-time 30 https://aadityaa2404-la-space.hf.space/api/v1/health || true

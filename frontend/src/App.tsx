@@ -271,50 +271,6 @@ const DashboardLayout: React.FC<{ children: React.ReactNode; hideFooter?: boolea
 
 /* ── App ── */
 
-const WakingUpNotice: React.FC<{ serverStatus: string; workerStatus: string }> = ({ serverStatus, workerStatus }) => (
-  <div className="min-h-screen min-h-dvh bg-background text-foreground flex items-center justify-center px-6">
-    <div className="max-w-xl w-full rounded-2xl border border-border bg-surface-low p-8 text-center shadow-2xl">
-      <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full mb-6">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
-        </span>
-        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-amber-600 dark:text-amber-400">Maintenance</span>
-      </div>
-      <h1 className="font-headline font-extrabold text-3xl sm:text-4xl tracking-tight mb-4">Legal Assist is waking up</h1>
-      <p className="text-on-surface-variant text-base sm:text-lg leading-relaxed mb-6">
-        The document worker is not fully ready yet. Please wait until it is healthy so OCR and analysis do not get stuck midway.
-      </p>
-      <div className="text-sm text-muted-foreground space-y-1">
-        <p>Backend status: {serverStatus === 'checking' ? 'checking' : 'waking'}</p>
-        <p>Worker status: {workerStatus}</p>
-      </div>
-    </div>
-  </div>
-);
-
-/* Only upload flows need the worker — gate those, leave the rest of the app
-   (dashboard, chat, history) usable even if the worker is momentarily napping. */
-const RequireWorker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { status: serverStatus, workerStatus, wake } = useServerHealth();
-
-  // Actively drive the wake while blocked here — the passive /health poll
-  // alone can sit on a stale "unhealthy" cache result for minutes with no
-  // one actually pinging the worker, since arriving here previously relied
-  // on the (now-gated) upload submit to trigger the force-check.
-  useEffect(() => {
-    if (serverStatus === 'live') return;
-    wake();
-    const id = window.setInterval(wake, 20000);
-    return () => window.clearInterval(id);
-  }, [serverStatus, wake]);
-
-  if (serverStatus !== 'live') {
-    return <WakingUpNotice serverStatus={serverStatus} workerStatus={workerStatus} />;
-  }
-  return <>{children}</>;
-};
-
 const App: React.FC = () => {
   const { isAuthenticated } = useAuth();
 
@@ -343,25 +299,23 @@ const App: React.FC = () => {
             )
           } />
 
-          {/* Upload (authed, needs worker) */}
+          {/* Upload (authed) — worker cold-start (if needed) is surfaced inline
+              in UploadView's processing panel, not gated here; the worker
+              sleeps when idle and wakes on demand when an upload starts. */}
           <Route path="/upload" element={
             <AuthRoute>
-              <RequireWorker>
                 <TopBar />
                 <main className="flex-1"><UploadView /></main>
                 <Footer />
-              </RequireWorker>
             </AuthRoute>
           } />
 
-          {/* Image Capture (authed, needs worker) */}
+          {/* Image Capture (authed) */}
           <Route path="/upload/capture" element={
             <AuthRoute>
-              <RequireWorker>
                 <TopBar />
                 <main className="flex-1"><ImageCapturePage /></main>
                 <Footer />
-              </RequireWorker>
             </AuthRoute>
           } />
 

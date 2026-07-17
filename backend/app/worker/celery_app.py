@@ -28,6 +28,14 @@ celery.conf.update(
     broker_transport_options={
         "socket_keepalive": True,
         "health_check_interval": 30,
+        # Kombu's redis transport defaults to a 1s BRPOP timeout when idle —
+        # that's ~2.6M Redis commands/month just from polling, on top of the
+        # worker Space rarely fully sleeping in practice (HF's 48h inactivity
+        # timer keeps getting reset by real uploads). Tasks already take
+        # minutes (OCR/HTOC/analysis), so up to 30s added latency before an
+        # idle worker picks up a queued job is a non-issue. Requires kombu
+        # >=5.6 (this repo's venv has 5.6.2; requirements.txt is unpinned).
+        "polling_interval": 30,
     },
     redis_socket_keepalive=True,
 )

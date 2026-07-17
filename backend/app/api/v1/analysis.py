@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
-from pydantic import BaseModel, EmailStr
 from app.services.session_service import SessionService
 from app.services.pii_anonymizer import PIIAnonymizer
 from app.services.gemini_client import GeminiClient
@@ -10,9 +9,8 @@ from app.core.dependencies import (
 )
 import logging
 from app.models.analysis import AnalysisResponse
-from app.services.report_generator import create_pdf_from_analysis
 from app.services.history_service import HistoryService
-from app.services.email_service import send_report_email, is_email_configured
+from app.worker.tasks import generate_report
 
 logger = logging.getLogger(__name__)
 
@@ -224,31 +222,63 @@ async def analyze_document(
     return AnalysisResponse(**result)
 
 
-@router.get("/analyze/report")
-async def get_analysis_report(
+@router.post("/analyze/report/generate")
+async def generate_analysis_report(
     session_id: str = Header(..., alias="X-Session-ID"),
     analysis_type: str = Query(default='full'),
     current_user: str = Depends(get_current_user),
     session_service: SessionService = Depends(get_session_service),
-    pii_service: PIIAnonymizer = Depends(get_pii_service),
-    gemini: GeminiClient = Depends(get_gemini_client),
-    tree_search: TreeSearchService = Depends(get_tree_search),
 ):
-    # Verify session ownership
+    """
+    Kick off PDF report rendering on the Celery worker instead of doing it
+    inline — WeasyPrint's HTML->PDF render is CPU-bound enough to stall the
+    API's async event loop for every other concurrent request while it runs.
+    Poll /analyze/report/status, then fetch /analyze/report/download once ready.
+    """
     session_check = await session_service.get_for_user(session_id, current_user)
     if not session_check:
         raise HTTPException(404, "Session expired or not found")
 
-    result = await _get_or_run_analysis(
-        session_id, analysis_type, session_service, pii_service, gemini, tree_search
-    )
+    status = await session_service.get_report_status(session_id, analysis_type)
+    if status == "ready" and await session_service.get_report(session_id, analysis_type):
+        return {"status": "ready"}
+    if status == "pending":
+        return {"status": "pending"}  # already queued — don't double-enqueue
 
-    filename = "Legal Analysis Report"
-    try:
-        pdf_bytes = create_pdf_from_analysis(result, filename, analysis_type)
-    except Exception as e:
-        logger.error("PDF generation failed: %s", e)
-        raise HTTPException(500, "PDF report generation failed. Please try again.")
+    await session_service.set_report_status(session_id, analysis_type, "pending")
+    generate_report.delay(session_id, analysis_type)
+    return {"status": "pending"}
+
+
+@router.get("/analyze/report/status")
+async def get_report_status(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    analysis_type: str = Query(default='full'),
+    current_user: str = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+):
+    session_check = await session_service.get_for_user(session_id, current_user)
+    if not session_check:
+        raise HTTPException(404, "Session expired or not found")
+
+    status = await session_service.get_report_status(session_id, analysis_type)
+    return {"status": status or "not_started"}
+
+
+@router.get("/analyze/report/download")
+async def download_analysis_report(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    analysis_type: str = Query(default='full'),
+    current_user: str = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+):
+    session_check = await session_service.get_for_user(session_id, current_user)
+    if not session_check:
+        raise HTTPException(404, "Session expired or not found")
+
+    pdf_bytes = await session_service.get_report(session_id, analysis_type)
+    if not pdf_bytes:
+        raise HTTPException(409, "Report is not ready yet. Check /analyze/report/status first.")
 
     return Response(
         content=pdf_bytes,
@@ -257,54 +287,3 @@ async def get_analysis_report(
     )
 
 
-class EmailReportRequest(BaseModel):
-    email: EmailStr
-    report_type: str = "full"
-
-
-@router.post("/analyze/email")
-async def email_analysis_report(
-    body: EmailReportRequest,
-    session_id: str = Header(..., alias="X-Session-ID"),
-    current_user: str = Depends(get_current_user),
-    session_service: SessionService = Depends(get_session_service),
-    pii_service: PIIAnonymizer = Depends(get_pii_service),
-    gemini: GeminiClient = Depends(get_gemini_client),
-    tree_search: TreeSearchService = Depends(get_tree_search),
-):
-    if not is_email_configured():
-        raise HTTPException(501, "Email is not configured on this server")
-
-    # Verify session ownership
-    session_check = await session_service.get_for_user(session_id, current_user)
-    if not session_check:
-        raise HTTPException(404, "Session expired or not found")
-
-    result = await _get_or_run_analysis(
-        session_id, body.report_type, session_service, pii_service, gemini, tree_search
-    )
-
-    session = await session_service.get(session_id)
-    filename = session.document_metadata.get("filename", "document") if session else "document"
-
-    try:
-        pdf_bytes = create_pdf_from_analysis(result, filename, body.report_type)
-    except Exception as e:
-        logger.error("PDF generation failed: %s", e)
-        raise HTTPException(500, "PDF report generation failed. Please try again.")
-
-    try:
-        send_report_email(
-            to_email=body.email,
-            pdf_bytes=pdf_bytes,
-            filename=filename,
-            report_type=body.report_type,
-            risk_score=result.get("overall_risk_score"),
-        )
-    except RuntimeError as e:
-        raise HTTPException(501, str(e))
-    except Exception as e:
-        logger.error("Email send failed: %s", e)
-        raise HTTPException(500, "Failed to send email. Please try again.")
-
-    return {"message": f"Report sent to {body.email}"}
