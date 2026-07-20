@@ -14,7 +14,7 @@ class HistoryService:
     async def save(
         self, user_email: str, analysis: dict, document_metadata: dict,
         page_texts: list = None, htoc_tree: dict = None, pii_mapping: dict = None,
-        page_chunks: list = None, bm25_data: dict = None,
+        bm25_data: dict = None,
     ):
         """Save analysis + chat data to user's history (permanent — no TTL)."""
         record = {
@@ -30,11 +30,12 @@ class HistoryService:
             "risks": analysis.get("risks", []),
             "obligations": analysis.get("obligations", []),
             "missing_clauses": analysis.get("missing_clauses", []),
-            # Chat data — enables re-chatting with past analyses without rebuilding the BM25 index
+            # Chat data — enables re-chatting with past analyses without rebuilding the BM25 index.
+            # Note: bm25_data.chunks IS the paragraph-chunk list (same data page_chunks would hold on
+            # the session) — don't also store page_chunks separately here, that would duplicate it.
             "page_texts": page_texts or [],
             "htoc_tree": htoc_tree,
             "pii_mapping": pii_mapping or {},
-            "page_chunks": page_chunks or [],
             "bm25_data": bm25_data,
         }
         await self.collection.insert_one(record)
@@ -47,7 +48,7 @@ class HistoryService:
             {
                 "_id": 0, "user_email": 0,
                 "page_texts": 0, "htoc_tree": 0, "pii_mapping": 0,
-                "page_chunks": 0, "bm25_data": 0,
+                "bm25_data": 0,
             },
         ).sort("created_at", -1).skip(skip).limit(limit)
 
