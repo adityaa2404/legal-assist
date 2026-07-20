@@ -57,17 +57,21 @@ async def restore_session_from_history(
 
     htoc_tree = item.get("htoc_tree")
     pii_mapping = item.get("pii_mapping", {})
+    page_chunks = item.get("page_chunks") or None
+    bm25_data = item.get("bm25_data")
 
-    # Rebuild BM25 index from stored page_texts
-    bm25 = BM25SearchService()
-    bm25.build_index(page_texts, htoc_tree)
-    bm25_data = bm25.get_serializable_data()
+    if not bm25_data:
+        # Older history rows saved before bm25_data/page_chunks were archived — rebuild once.
+        bm25 = BM25SearchService()
+        bm25.build_index(page_texts, htoc_tree)
+        bm25_data = bm25.get_serializable_data()
 
     # Create a new session with the restored data
     session = await session_service.create(
         pii_mapping=pii_mapping,
         anonymized_text="\n\n".join(page_texts),
         page_texts=page_texts,
+        page_chunks=page_chunks,
         htoc_tree=htoc_tree,
         bm25_data=bm25_data,
         htoc_status="ready",

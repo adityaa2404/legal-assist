@@ -214,6 +214,8 @@ async def analyze_document(
                     page_texts=session.page_texts,
                     htoc_tree=session.htoc_tree,
                     pii_mapping=session.pii_mapping,
+                    page_chunks=session.page_chunks,
+                    bm25_data=session.bm25_data,
                 )
                 await session_service.save_analysis(session_id, "_history_saved", {"saved": True})
             except Exception as e:

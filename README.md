@@ -17,8 +17,8 @@ A privacy-preserving legal document analysis platform. Upload a contract, agreem
 - **Multi-Provider HTOC Building** — Gemini by default; docs over 50 pages auto-route to Groq (faster, cheaper for large prompts); Gemini failures retry once before falling back to Groq automatically.
 - **Dual OCR Modes** — Fast (Gemini Vision API, 100+ languages) and Secure (EasyOCR, fully local, no data leaves the server, 13+ Indian languages).
 - **Image Capture** — No PDF? Take photos of your document (up to 15 pages), compressed client-side, stitched to a PDF server-side, then run through the same OCR pipeline.
-- **PDF Reports** — Download or email a styled analysis report.
-- **Session-Scoped, Auto-Deleted Storage** — Documents and extracted text are stored only for the session lifetime (2 hours), enforced by a MongoDB TTL index — not a UI promise, the database deletes it.
+- **PDF Reports** — Generate and download a styled analysis report (built asynchronously on the worker; poll status, then download).
+- **Session-Scoped Working Storage, Permanent History** — The live session (raw file, page text, BM25 index) is deleted after 2 hours via a MongoDB TTL index — not a UI promise, the database deletes it. Anonymized extracted text, the BM25 index, and analysis results are separately saved to the user's `analysis_history` permanently once a full analysis completes, so past documents remain chat-able after the session expires.
 
 ---
 
@@ -31,7 +31,7 @@ A privacy-preserving legal document analysis platform. Upload a contract, agreem
 5. **Build retrieval indexes** — HTOC (hierarchical table of contents) and BM25 artifacts are built in the background so chat and analysis can reuse the document's structure without re-reading the whole thing every time.
 6. **Process in background** — OCR, PII, and index-building run through a Celery worker so the API returns immediately while the heavy work continues.
 7. **Run analysis and chat** — Gemini is used by default, with Groq/OpenAI/Claude fallbacks where configured; responses are de-anonymized before returning to the UI.
-8. **Return reports** — The frontend renders analysis, chat, history, clause views, and PDF/email reports from the stored session data.
+8. **Return reports** — The frontend renders analysis, chat, history, clause views, and PDF reports from the stored session data.
 
 For the detailed phase-by-phase walkthrough of each step, see [working.md](working.md).
 
@@ -435,7 +435,6 @@ For near-zero cold starts, add an external uptime monitor (e.g. UptimeRobot free
 | `CORS_ORIGINS` | No | `["http://localhost:5173"]` | Allowed frontend origins (JSON array string recommended in env) |
 | `REDIS_URL` | Yes | — | Redis broker/backend URL — must match exactly between the API and worker |
 | `WORKER_URL` | No (API only) | — | Worker's public URL. When set, `/health` pings it whenever the worker's heartbeat looks stale, waking it alongside the API |
-| `SMTP_HOST` | No | — | Email server for report delivery |
 | `RATE_LIMIT_RPM` | No | `300` | API rate limit per minute |
 
 ---
@@ -451,8 +450,9 @@ For near-zero cold starts, add an external uptime monitor (e.g. UptimeRobot free
 | `GET` | `/api/v1/htoc-status` | Poll document processing status |
 | `GET` | `/api/v1/htoc-tree` | Get document structure tree |
 | `POST` | `/api/v1/analyze` | Run AI analysis on document |
-| `GET` | `/api/v1/analyze/report` | Download PDF report |
-| `POST` | `/api/v1/analyze/email` | Email PDF report |
+| `POST` | `/api/v1/analyze/report/generate` | Enqueue PDF report generation (worker job) |
+| `GET` | `/api/v1/analyze/report/status` | Poll report generation status |
+| `GET` | `/api/v1/analyze/report/download` | Download the generated PDF report |
 | `POST` | `/api/v1/chat` | Chat Q&A (non-streaming) |
 | `POST` | `/api/v1/chat/stream` | Chat Q&A (SSE streaming) |
 | `GET` | `/api/v1/document/pdf` | Download stitched PDF (image captures) |
@@ -563,7 +563,6 @@ python -m evaluation.storage_benchmark --pdf evaluation/docs/sliceSFBLoanApplica
 - **Anonymize-first** — PII detected and replaced with tokens (`[PERSON_1]`, `[IN_AADHAAR_1]`) before any text reaches Gemini
 - **Anonymized-at-rest** — Extracted text is PII-anonymized before storage; raw file bytes are kept only to support OCR/re-processing and are deleted with the session
 - **Session ownership** — Each session tied to user email; cross-user access blocked
-- **Auto-expiry** — MongoDB TTL index auto-deletes all session data after 2 hours
 - **Error sanitization** — Internal errors logged but never exposed to clients
 - **Auth rate limiting** — 15/min on login, 10/min on register (brute-force protection)
 - **Streaming safety** — SSE deanonymization buffered to prevent partial PII token leakage

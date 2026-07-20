@@ -32,7 +32,7 @@ const LandingPage: React.FC = () => {
                 <div className="flex items-center gap-4 mb-8">
                     <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full">
                         <Icon name="verified_user" size="sm" filled className="text-primary" />
-                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">Auto-Delete Enabled</span>
+                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">PII Anonymized</span>
                     </div>
                     <div className="inline-flex items-center gap-2 glass-badge px-3 py-2 rounded-full">
                         {serverStatus === 'live' ? (
@@ -68,7 +68,7 @@ const LandingPage: React.FC = () => {
 
                 <p className="text-on-surface-variant text-lg sm:text-xl max-w-2xl mb-12 leading-relaxed">
                     Upload any legal contract. Get instant risk scoring, clause extraction, and plain-English explanations.
-                    PII is anonymized before any AI call, and documents are auto-deleted after your session expires.
+                    PII is anonymized before any AI call. Your original file is deleted after your session expires — analysis results stay saved in your history.
                 </p>
 
                 <div className="flex flex-col items-center gap-3 mb-16">
@@ -99,7 +99,7 @@ const LandingPage: React.FC = () => {
                     {[
                         { icon: 'encrypted', label: 'End-to-End Encryption' },
                         { icon: 'visibility_off', label: 'PII Anonymized' },
-                        { icon: 'delete_sweep', label: 'Auto-Deleted After Session' },
+                        { icon: 'delete_sweep', label: 'Source File Deleted After Session' },
                     ].map(item => (
                         <div key={item.label} className="flex items-center gap-2 text-xs sm:text-sm font-medium">
                             <Icon name={item.icon} size="sm" className="text-outline" />
@@ -123,7 +123,7 @@ const LandingPage: React.FC = () => {
                             {
                                 icon: 'upload_file',
                                 title: 'Upload',
-                                desc: 'Drop a PDF or DOCX. We extract text locally, anonymize all personal data with Presidio, and never store anything.',
+                                desc: 'Drop a PDF or DOCX. All personal data is anonymized with Presidio-style detection before any AI model ever sees it.',
                             },
                             {
                                 icon: 'auto_awesome',
@@ -154,8 +154,8 @@ const LandingPage: React.FC = () => {
                     {[
                         { value: '22+', label: 'OCR Languages' },
                         { value: '<150s', label: 'Avg. Analysis Time*' },
-                        { value: '0', label: 'Data Retained' },
-                        { value: '100%', label: 'Local PII Processing' },
+                        { value: '100%', label: 'PII Anonymized Pre-AI' },
+                        { value: '0', label: 'Raw Files Kept After Session' },
                     ].map(stat => (
                         <div key={stat.label}>
                             <p className="font-headline font-extrabold text-3xl sm:text-4xl text-primary">{stat.value}</p>
@@ -172,7 +172,7 @@ const LandingPage: React.FC = () => {
                     <p className="text-[10px] text-muted-foreground/70 font-mono leading-relaxed">
                         Legal Assist is an AI-powered tool for informational purposes only. It does not provide legal advice.
                         Always consult a qualified legal professional before making decisions based on any analysis.
-                        Documents are automatically deleted after your session expires.
+                        Original files are deleted after your session expires; anonymized analysis results are retained in your account history.
                     </p>
                 </div>
             </section>

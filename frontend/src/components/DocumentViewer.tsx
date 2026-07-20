@@ -28,7 +28,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ currentPage: externalPa
                 {isImageCapture ? (
                     <>
                         <p className="text-sm font-medium mb-1">PDF no longer available</p>
-                        <p className="text-xs">Auto-deleted per our zero-retention policy. You can still chat and view the analysis.</p>
+                        <p className="text-xs">The original PDF is deleted after your session expires — you can still chat and view the saved analysis.</p>
                     </>
                 ) : (
                     <>

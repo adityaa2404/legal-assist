@@ -95,7 +95,7 @@ async def _understand_query(query: str, gemini: GeminiClient, provider: str) -> 
         "You are a legal document search expert. Analyze this query and return a JSON object.\n\n"
         f"Query: {query}\n\n"
         "Return ONLY valid JSON:\n"
-        "{\n"
+        "{\n"\
         '  "intent": "exhaustive" | "comparative" | "targeted",\n'
         '  "expanded_query": "<original query rephrased with legal synonyms added>",\n'
         '  "key_terms": ["<term1>", "<term2>", "<term3>"]\n'

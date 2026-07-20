@@ -382,13 +382,13 @@ const UploadView: React.FC = () => {
             <div className="mb-16 text-center">
                 <div className="inline-flex items-center space-x-2 glass-badge px-4 py-1.5 rounded-full mb-6">
                     <Icon name="verified_user" size="sm" filled className="text-primary" />
-                    <span className="text-[11px] font-bold tracking-widest uppercase text-primary">Auto-Delete Enabled</span>
+                    <span className="text-[11px] font-bold tracking-widest uppercase text-primary">PII Anonymized</span>
                 </div>
                 <h1 className="font-headline text-5xl md:text-6xl font-extrabold tracking-tight text-on-surface mb-4">
                     Analyze Legal Documents.
                 </h1>
                 <p className="text-on-surface-variant text-lg max-w-2xl mx-auto">
-                    Upload your contracts or case files for instant risk assessment. PII is anonymized before any AI call, and documents are auto-deleted after your session expires.
+                    Upload your contracts or case files for instant risk assessment. PII is anonymized before any AI call. Your original file is deleted after your session expires — analysis results stay saved in your history.
                 </p>
             </div>
 
@@ -438,7 +438,7 @@ const UploadView: React.FC = () => {
                         {[
                             { icon: 'visibility_off', label: 'PII Anonymized' },
                             { icon: 'bolt', label: 'Instant Analysis' },
-                            { icon: 'delete_sweep', label: 'Auto-Deleted' },
+                            { icon: 'delete_sweep', label: 'Source File Deleted' },
                         ].map((item) => (
                             <div key={item.label} className="flex items-center p-4 bg-surface-container-low rounded-lg transition-transform hover:translate-x-1 duration-200">
                                 <Icon name={item.icon} className="text-secondary mr-3" />

@@ -86,7 +86,7 @@ const TopBar: React.FC<{ minimal?: boolean }> = ({ minimal }) => {
         <div className="flex items-center space-x-1">
           <div className="glass-badge px-3 py-1 rounded-full hidden sm:flex items-center space-x-1.5 mr-2">
             <Icon name="verified_user" size="sm" filled className="text-primary" />
-            <span className="text-[10px] font-bold tracking-tighter font-mono text-foreground">Auto-Delete Enabled</span>
+            <span className="text-[10px] font-bold tracking-tighter font-mono text-foreground">PII Anonymized</span>
           </div>
 
           <button onClick={toggleTheme} className="p-2 hover:bg-muted rounded-md transition-all" title="Toggle theme">
@@ -210,7 +210,7 @@ const Footer: React.FC = () => (
       <div className="flex flex-col md:flex-row justify-between items-center w-full gap-4">
         <div className="flex items-center space-x-4">
           <Logo size="sm" />
-          <span className="font-mono text-[10px] tracking-tighter">&copy; 2026 LegalAssist. Auto-Delete Enabled.</span>
+          <span className="font-mono text-[10px] tracking-tighter">&copy; 2026 LegalAssist. PII Anonymized Before AI.</span>
         </div>
         <span className="font-mono text-[10px] tracking-tighter">AI-powered legal document analysis</span>
       </div>
