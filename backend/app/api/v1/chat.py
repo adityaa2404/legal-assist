@@ -204,11 +204,12 @@ async def chat_with_document(
     if not session.anonymized_text and status in ("processing",):
         raise HTTPException(202, "Document is still being processed. Please wait a few seconds.")
 
-    # 2. Anonymize question + history
-    anonymized_question, _ = await pii_service.anonymize(request.message)
+    # 2. Anonymize question + history — reuse tokens already assigned in session.pii_mapping
+    # so an entity mentioned in chat gets the same token as its mention in the retrieved context.
+    anonymized_question = await pii_service.anonymize_with_known_mapping(request.message, session.pii_mapping)
     anonymized_history = []
     for msg in request.history:
-        anonymized_content, _ = await pii_service.anonymize(msg.content)
+        anonymized_content = await pii_service.anonymize_with_known_mapping(msg.content, session.pii_mapping)
         anonymized_history.append({"role": msg.role, "content": anonymized_content})
 
     # 3. Check response cache
@@ -313,11 +314,12 @@ async def chat_with_document_stream(
     if not session.anonymized_text and status in ("processing",):
         raise HTTPException(202, "Document is still being processed. Please wait a few seconds.")
 
-    # 2. Anonymize
-    anonymized_question, _ = await pii_service.anonymize(request.message)
+    # 2. Anonymize — reuse tokens already assigned in session.pii_mapping so an entity
+    # mentioned in chat gets the same token as its mention in the retrieved context.
+    anonymized_question = await pii_service.anonymize_with_known_mapping(request.message, session.pii_mapping)
     anonymized_history = []
     for msg in request.history:
-        anonymized_content, _ = await pii_service.anonymize(msg.content)
+        anonymized_content = await pii_service.anonymize_with_known_mapping(msg.content, session.pii_mapping)
         anonymized_history.append({"role": msg.role, "content": anonymized_content})
 
     # 3. Check cache

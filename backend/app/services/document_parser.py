@@ -50,6 +50,47 @@ DIGITAL_TEXT_THRESHOLD = 50 # If PyMuPDF extracts >50 chars, skip OCR for that p
 
 
 CHUNK_OVERLAP_CHARS = 200  # overlap between last chunk of page N and first chunk of page N+1
+MIN_CHUNK_CHARS = 80  # merge adjacent paragraph-fragments below this length (form fields, table cells)
+
+
+def _merge_short_chunks(chunks: list, page_idx: int) -> list:
+    """
+    Merge adjacent chunks so each emitted chunk has at least MIN_CHUNK_CHARS of text.
+    Form-style pages (no blank lines) fall back to splitting on single newlines in
+    _chunk_page_into_paragraphs, producing dozens of 1-3 word fragments (form labels,
+    table cells) that BM25 scores individually — a chunk this short gets an inflated
+    score from length normalization for any query word it happens to contain, and gives
+    the LLM no surrounding context to answer from even when correctly retrieved.
+    """
+    if not chunks:
+        return chunks
+
+    merged = []
+    buffer = []
+    buffer_len = 0
+    for chunk in chunks:
+        buffer.append(chunk)
+        buffer_len += len(chunk["text"])
+        if buffer_len >= MIN_CHUNK_CHARS:
+            merged.append(buffer)
+            buffer, buffer_len = [], 0
+
+    if buffer:
+        if merged:
+            merged[-1] = merged[-1] + buffer  # fold trailing short leftover into the previous group
+        else:
+            merged.append(buffer)  # whole page never reached the threshold — emit as one chunk
+
+    result = []
+    for i, group in enumerate(merged):
+        result.append({
+            "chunk_id": f"p{page_idx}_c{i}",
+            "page_idx": page_idx,
+            "char_start": group[0]["char_start"],
+            "char_end": group[-1]["char_end"],
+            "text": "\n".join(c["text"] for c in group),
+        })
+    return result
 
 
 def _chunk_page_into_paragraphs(page_text: str, page_idx: int, prev_page_tail: str = "") -> list:
@@ -75,6 +116,22 @@ def _chunk_page_into_paragraphs(page_text: str, page_idx: int, prev_page_tail: s
         end = start + len(para)
         cursor = end
 
+        # Skip paragraphs that fall entirely inside the carried-over overlap prefix —
+        # otherwise the tail of page N gets re-chunked and duplicated on page N+1.
+        if end <= overlap_offset:
+            continue
+
+        # A paragraph can also straddle the boundary: if the tail's last line has no
+        # newline before page_text starts (joined only by the " " separator above), the
+        # tail's last fragment and the page's first fragment merge into one paragraph.
+        # Trim off the part that's still tail content so it doesn't leak into this chunk.
+        if start < overlap_offset:
+            para = para[overlap_offset - start:].lstrip()
+            start = overlap_offset
+            end = start + len(para)
+            if not para:
+                continue
+
         # Adjust char offsets to be relative to original page_text (not including overlap prefix)
         adjusted_start = max(0, start - overlap_offset)
         adjusted_end = max(0, end - overlap_offset)
@@ -97,7 +154,7 @@ def _chunk_page_into_paragraphs(page_text: str, page_idx: int, prev_page_tail: s
             "text": page_text.strip(),
         })
 
-    return chunks
+    return _merge_short_chunks(chunks, page_idx)
 
 
 class DocumentParser:

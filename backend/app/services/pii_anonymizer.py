@@ -20,7 +20,10 @@ try:
         ),
         PatternRecognizer(
             supported_entity="IN_PAN",
-            patterns=[Pattern("pan", r"\b[A-Z]{5}\d{4}[A-Z]\b", 0.9)],
+            # Tolerates whitespace/hyphen between groups (e.g. "AOVPP 5588 B"), same as
+            # IN_AADHAAR below — printed/exported ITR PDFs commonly space out the PAN this
+            # way, and the original rigid AAAAA9999A-only pattern missed it entirely.
+            patterns=[Pattern("pan", r"\b[A-Z]{5}[\s-]?\d{4}[\s-]?[A-Z]\b", 0.9)],
         ),
         PatternRecognizer(
             supported_entity="IN_GSTIN",
@@ -45,10 +48,6 @@ try:
         PatternRecognizer(
             supported_entity="IN_VEHICLE_REG",
             patterns=[Pattern("vehicle", r"\b[A-Z]{2}\s?\d{1,2}\s?[A-Z]{1,3}\s?\d{4}\b", 0.6)],
-        ),
-        PatternRecognizer(
-            supported_entity="IN_PIN_CODE",
-            patterns=[Pattern("pincode", r"\b[1-9]\d{5}\b", 0.4)],
         ),
         PatternRecognizer(
             supported_entity="PERSON",
@@ -119,6 +118,35 @@ class PIIAnonymizer:
         except asyncio.TimeoutError:
             logger.error("PII anonymization timed out after %.0fs on %d chars", timeout, len(text))
             return text, {}  # Fail-open: text still protected by anonymized placeholders in prompts
+
+    async def anonymize_with_known_mapping(
+        self, text: str, known_mapping: Dict[str, str], timeout: float = 60.0
+    ) -> str:
+        """
+        Anonymize text, reusing tokens from an existing (token -> original) mapping
+        before detecting anything new. Without this, a chat question/history mentioning
+        an entity already tokenized in the document (e.g. [PERSON_1]) would get re-detected
+        fresh each call with independent counters, assigning it a different token than the
+        one used in the retrieved context — the LLM then sees two tokens for one entity.
+        """
+        if not text:
+            return ""
+        text_to_scan = self._substitute_known_values(text, known_mapping) if known_mapping else text
+        anonymized_text, _ = await self.anonymize(text_to_scan, timeout=timeout)
+        return anonymized_text
+
+    def _substitute_known_values(self, text: str, known_mapping: Dict[str, str]) -> str:
+        """Reverse-lookup pass: replace any occurrence of an already-known PII value with its existing token."""
+        reverse = {orig: token for token, orig in known_mapping.items() if orig}
+        if not reverse:
+            return text
+        sorted_origs = sorted(reverse.keys(), key=len, reverse=True)
+        combined = "|".join(
+            (f"\\b{re.escape(orig)}\\b" if orig[0].isalnum() and orig[-1].isalnum() else re.escape(orig))
+            for orig in sorted_origs
+        )
+        compiled = re.compile(combined)
+        return compiled.sub(lambda m: reverse[m.group()], text)
 
     def _anonymize_with_presidio(self, text: str) -> Tuple[str, Dict[str, str]]:
         """Run all pattern recognizers on text, then build token mapping."""
