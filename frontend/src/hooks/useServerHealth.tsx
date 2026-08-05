@@ -19,6 +19,15 @@ export interface ServerHealthInfo {
 const CONSECUTIVE_FAILURES_THRESHOLD = 2;
 const POLL_INTERVAL_MS = 15000;
 
+// After an explicit wake(), the worker Space can take up to ~60s to come up.
+// The routine 15s poll hits /health without force, which just re-reads the
+// 300s server-side cache (see health.py) and won't notice the worker became
+// healthy mid-window. So while waking, force-poll more frequently until the
+// worker reports healthy or this budget runs out — then hand back off to the
+// cheap cached poll.
+const WAKE_FORCE_POLL_INTERVAL_MS = 5000;
+const WAKE_FORCE_POLL_BUDGET_MS = 90000;
+
 const ServerHealthContext = createContext<ServerHealthInfo | undefined>(undefined);
 
 // Mounted once at the app root so status survives route navigation instead
@@ -31,6 +40,7 @@ export function ServerHealthProvider({ children }: { children: ReactNode }) {
         workerStatus: 'unknown',
     });
     const consecutiveFailures = useRef(0);
+    const wakePollId = useRef<number | null>(null);
 
     const applyResult = useCallback((ok: boolean, apiStatus: string, workerStatus?: string) => {
         consecutiveFailures.current = ok ? 0 : consecutiveFailures.current + 1;
@@ -55,11 +65,35 @@ export function ServerHealthProvider({ children }: { children: ReactNode }) {
             .catch(() => applyResult(false, 'down'));
     }, [applyResult]);
 
-    const wake = useCallback(() => {
-        axiosClient.post('/health/wake', {}, { timeout: 5000 })
-            .then(({ data }) => applyResult(data.status === 'ok', data.api_status || 'ok', data.worker_status || 'unknown'))
-            .catch(() => applyResult(false, 'down'));
+    const forceCheck = useCallback(() => {
+        return axiosClient.post('/health/wake', {}, { timeout: 5000 })
+            .then(({ data }) => {
+                applyResult(data.status === 'ok', data.api_status || 'ok', data.worker_status || 'unknown');
+                return data.worker_status === 'healthy';
+            })
+            .catch(() => {
+                applyResult(false, 'down');
+                return false;
+            });
     }, [applyResult]);
+
+    const wake = useCallback(() => {
+        if (wakePollId.current !== null) return; // already force-polling
+
+        const deadline = Date.now() + WAKE_FORCE_POLL_BUDGET_MS;
+        forceCheck().then(function poll(healthy) {
+            if (healthy || Date.now() >= deadline) {
+                if (wakePollId.current !== null) {
+                    window.clearTimeout(wakePollId.current);
+                    wakePollId.current = null;
+                }
+                return;
+            }
+            wakePollId.current = window.setTimeout(() => {
+                forceCheck().then(poll);
+            }, WAKE_FORCE_POLL_INTERVAL_MS);
+        });
+    }, [forceCheck]);
 
     useEffect(() => {
         check();
