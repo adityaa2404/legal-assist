@@ -32,13 +32,19 @@ _worker_status_cache = {"healthy": False, "checked_at": 0.0}
 async def _check_worker() -> bool:
     """Hit the worker Space's dummy HTTP listener directly (the actual network call)."""
     if not settings.WORKER_URL:
+        logger.warning("Worker health check skipped: WORKER_URL is not set")
         return False
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
             resp = await client.get(settings.WORKER_URL)
+            if resp.status_code != 200:
+                logger.warning(
+                    "Worker health check got non-200: url=%s status=%s body=%r",
+                    settings.WORKER_URL, resp.status_code, resp.text[:200],
+                )
             return resp.status_code == 200
     except Exception as exc:
-        logger.debug("Worker health check failed (worker may still be waking up): %s", exc)
+        logger.warning("Worker health check failed: url=%s error=%s", settings.WORKER_URL, exc)
         return False
 
 
