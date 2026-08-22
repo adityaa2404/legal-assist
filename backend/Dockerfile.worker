@@ -2,31 +2,50 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime deps for OCR (EasyOCR/PyMuPDF need these even without the PDF-report stack)
+# System dependencies for:
+# - EasyOCR / OpenCV
+# - PyMuPDF
+# - WeasyPrint HTML -> PDF
 RUN apt-get update && apt-get install -y \
-    build-essential gcc libgl1 libglib2.0-0 \
+    build-essential \
+    gcc \
+    libgl1 \
+    libglib2.0-0 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    fonts-dejavu \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Python dependencies
 COPY requirements-worker.txt .
 RUN pip install --no-cache-dir -r requirements-worker.txt
 
-# Pre-download EasyOCR models at build time — the container has no persistent
-# storage, so without this every cold start re-downloads the detector +
-# recognition models from scratch (minutes of delay on first OCR job).
-# Covers en + hi (most common case per _LANG_MAP); other languages still
-# download lazily on first use of that language.
+# Verify WeasyPrint can load all required native libraries
+RUN python -c "from weasyprint import HTML; print('WeasyPrint OK')"
+
+# Pre-download EasyOCR models at build time.
+# This prevents model downloads on every cold start.
+# Covers Hindi + English.
 RUN python -c "import easyocr; easyocr.Reader(['hi', 'en'], gpu=False)"
 
+# Copy application
 COPY ./app ./app
 
-# Add a non-root user for security
-RUN useradd -m appuser && chown -R appuser:appuser /app \
+# Create non-root user
+RUN useradd -m appuser \
+    && chown -R appuser:appuser /app \
     && cp -r /root/.EasyOCR /home/appuser/.EasyOCR \
     && chown -R appuser:appuser /home/appuser/.EasyOCR
-USER appuser
-ENV HOME=/home/appuser
 
+USER appuser
+
+ENV HOME=/home/appuser
 ENV PORT=7860
+
 EXPOSE 7860
 
 CMD ["python", "app/worker_entry.py"]
