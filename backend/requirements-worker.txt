@@ -17,3 +17,7 @@ celery[redis]
 redis
 dnspython
 easyocr
+weasyprint
+pytz
+matplotlib
+jinja2
