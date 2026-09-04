@@ -30,10 +30,7 @@ const LandingPage: React.FC = () => {
             {/* Hero */}
             <section className="flex-1 flex flex-col items-center justify-center px-6 py-24 text-center max-w-5xl mx-auto">
                 <div className="flex items-center gap-4 mb-8">
-                    <div className="inline-flex items-center gap-2 glass-badge px-4 py-2 rounded-full">
-                        <Icon name="verified_user" size="sm" filled className="text-primary" />
-                        <span className="text-[11px] font-bold uppercase tracking-widest font-mono text-primary">PII Anonymized</span>
-                    </div>
+                    
                     <div className="inline-flex items-center gap-2 glass-badge px-3 py-2 rounded-full">
                         {serverStatus === 'live' ? (
                             <>

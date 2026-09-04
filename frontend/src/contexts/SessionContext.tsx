@@ -37,6 +37,10 @@ export const SessionProvider: React.FC<{ children: ReactNode }> = ({ children })
     // Persist session & analysis to sessionStorage
     const setSession = (s: Session | null) => {
         setSessionState(s);
+        // Any real session set by upload/restore must leave read-only history mode.
+        // setAnalysisFromHistory explicitly turns this back on after setting its
+        // display-only placeholder session.
+        if (s) setIsHistoryView(false);
         if (s) {
             sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
         } else {

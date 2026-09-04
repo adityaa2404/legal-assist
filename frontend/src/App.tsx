@@ -152,7 +152,7 @@ const SideNav: React.FC = () => {
           <LogoIcon size={32} />
           <div className="flex flex-col">
             <span className="font-headline font-black text-lg tracking-tight leading-none">
-              <span style={{ color: '#0B1F3A' }} className="dark:text-blue-200">Legal</span><span className="text-foreground">Assist</span>
+              <span className="text-[#0B1F3A] dark:text-blue-200">Legal</span><span className="text-foreground">Assist</span>
             </span>
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
               {user?.full_name || 'Verified Session'}

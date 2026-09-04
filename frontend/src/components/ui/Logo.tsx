@@ -27,7 +27,7 @@ const Logo: React.FC<LogoProps> = ({ showText = true, size = 'md', className = '
         <LogoIcon size={iconSize[size]} />
         {showText && (
             <span className={`font-headline font-black tracking-tight ${textSize[size]}`}>
-                <span style={{ color: '#0B1F3A' }} className="dark:text-blue-200">Legal</span>
+                <span className="text-[#0B1F3A] dark:text-blue-200">Legal</span>
                 <span className="text-foreground">Assist</span>
             </span>
         )}
