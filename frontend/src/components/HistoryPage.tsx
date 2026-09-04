@@ -6,15 +6,16 @@ import { useSession } from '@/hooks/useSession';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import Icon from './ui/icon';
+import HistoryReuploadGate from './HistoryReuploadGate';
 
 const HistoryPage: React.FC = () => {
     const [history, setHistory] = useState<HistoryItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [expanded, setExpanded] = useState<number | null>(null);
-    const [restoring, setRestoring] = useState<number | null>(null);
     const [deletingIdx, setDeletingIdx] = useState<number | null>(null);
-    const { setAnalysisFromHistory, setSession, setAnalysis } = useSession();
+    const [showReuploadGate, setShowReuploadGate] = useState(false);
+    const { setAnalysisFromHistory } = useSession();
     const { user, logout } = useAuth();
     const navigate = useNavigate();
 
@@ -51,37 +52,10 @@ const HistoryPage: React.FC = () => {
         navigate('/app');
     };
 
-    const handleChatWithDoc = async (item: HistoryItem, index: number) => {
-        setRestoring(index);
-        try {
-            const res = await historyApi.restoreSession(item.created_at);
-            setSession({
-                session_id: res.session_id,
-                created_at: item.created_at,
-                expires_at: '',
-                pii_mapping: {},
-                document_metadata: {
-                    filename: res.filename,
-                    page_count: res.page_count,
-                    size_bytes: 0,
-                },
-            });
-            setAnalysis({
-                summary: item.summary,
-                document_type: item.document_type,
-                overall_risk_score: item.overall_risk_score,
-                parties: item.parties as any,
-                key_clauses: item.key_clauses,
-                risks: item.risks,
-                obligations: item.obligations as any,
-                missing_clauses: item.missing_clauses,
-            });
-            navigate('/app/chat');
-        } catch {
-            setError('Failed to restore session for chat');
-        } finally {
-            setRestoring(null);
-        }
+    const handleChatWithDoc = () => {
+        // History is an archived analysis, not a live document session.
+        // Gate here so no fake history session ID reaches chat/report endpoints.
+        setShowReuploadGate(true);
     };
 
     const handleDeleteAnalysis = async (item: HistoryItem, index: number) => {
@@ -278,16 +252,11 @@ const HistoryPage: React.FC = () => {
                                                 <span>View Analysis</span>
                                             </button>
                                             <button
-                                                onClick={() => handleChatWithDoc(item, i)}
-                                                disabled={restoring === i}
-                                                className="flex-1 bg-secondary-container text-foreground py-2.5 rounded-lg font-bold text-sm flex items-center justify-center space-x-2 transition-all active:scale-95 hover:shadow-md disabled:opacity-50"
+                                                onClick={handleChatWithDoc}
+                                                className="flex-1 bg-secondary-container text-foreground py-2.5 rounded-lg font-bold text-sm flex items-center justify-center space-x-2 transition-all active:scale-95 hover:shadow-md"
                                             >
-                                                {restoring === i ? (
-                                                    <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                                                ) : (
-                                                    <Icon name="forum" size="sm" />
-                                                )}
-                                                <span>{restoring === i ? 'Restoring...' : 'Chat with Doc'}</span>
+                                                <Icon name="forum" size="sm" />
+                                                <span>Chat with Doc</span>
                                             </button>
                                         </div>
                                     </div>
@@ -297,6 +266,13 @@ const HistoryPage: React.FC = () => {
                     </div>
                 )}
             </div>
+
+            {showReuploadGate && (
+                <HistoryReuploadGate
+                    onClose={() => setShowReuploadGate(false)}
+                    onRedirectToUpload={() => navigate('/upload')}
+                />
+            )}
 
             {/* Danger Zone — Delete Account */}
             <div className="border border-error/30 rounded-xl overflow-hidden">

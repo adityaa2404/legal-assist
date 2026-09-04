@@ -175,8 +175,6 @@ async def _build_report(session_id: str, report_type: str) -> bytes:
 @shared_task(
     bind=True,
     name="tasks.generate_report",
-    max_retries=2,
-    default_retry_delay=15,
 )
 def generate_report(self, session_id: str, report_type: str):
     """Build the analysis PDF report and cache it on the session (report_pdf.{type})."""
@@ -194,6 +192,9 @@ def generate_report(self, session_id: str, report_type: str):
         logger.error("Soft time limit exceeded generating report for session %s", session_id)
         _run(session_service.set_report_status(session_id, report_type, "failed"))
     except Exception as exc:
-        logger.error("Report generation failed for session %s: %s", session_id, exc)
+        # A rendering error must be terminal for this report. Retrying a missing
+        # native WeasyPrint dependency or a malformed template only repeats the
+        # same failure and can destabilize the limited worker container.
+        logger.exception("Report generation failed for session %s", session_id)
         _run(session_service.set_report_status(session_id, report_type, "failed"))
-        raise self.retry(exc=exc)
+        return {"status": "failed", "error": str(exc)}

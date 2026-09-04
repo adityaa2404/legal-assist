@@ -44,12 +44,7 @@ const ChatPage: React.FC = () => {
                         <Icon name="picture_as_pdf" size="sm" className="text-error" />
                         <span className="text-xs font-bold">View PDF</span>
                     </button>
-                    <div className="hidden sm:flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                        <span className="text-[10px] font-mono font-bold text-muted-foreground uppercase tracking-widest">
-                            Hybrid RAG Active
-                        </span>
-                    </div>
+                    
                 </div>
             </div>
 

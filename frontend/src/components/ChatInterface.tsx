@@ -4,13 +4,15 @@ import { useSession } from '@/hooks/useSession';
 import Icon from './ui/icon';
 import Markdown from 'react-markdown';
 import DisclaimerBanner from './DisclaimerBanner';
+import { useNavigate } from 'react-router-dom';
 
 interface ChatInterfaceProps {
     onNavigateToPage?: (page: number) => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
-    const { session } = useSession();
+    const { session, isHistoryView } = useSession();
+    const navigate = useNavigate();
     const { messages, sendMessage, isLoading, isStreaming, error } = useChat(session?.session_id || null);
     const inputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -72,6 +74,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
         );
     }
 
+    if (isHistoryView) {
+        return (
+            <div className="h-full bg-card rounded-xl border border-border flex flex-col items-center justify-center p-8 text-center">
+                <div className="w-12 h-12 bg-amber-500/15 rounded-full flex items-center justify-center text-amber-600 dark:text-amber-400 mb-4">
+                    <Icon name="upload_file" />
+                </div>
+                <h3 className="font-bold text-lg">Re-upload needed to chat</h3>
+                <p className="text-sm text-muted-foreground mt-2 max-w-md">
+                    Saved analyses do not keep a live document session. Re-upload the original document to start a secure chat.
+                </p>
+                <button
+                    onClick={() => navigate('/upload')}
+                    className="mt-5 bg-primary text-primary-foreground px-4 py-2.5 rounded-lg text-sm font-bold hover:opacity-90 transition-opacity"
+                >
+                    Re-upload document
+                </button>
+            </div>
+        );
+    }
+
     return (
         <div className="h-full max-h-full bg-card rounded-xl border border-border flex flex-col overflow-hidden">
             {/* Header */}
@@ -83,9 +105,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onNavigateToPage }) => {
                     </span>
                     <h3 className="font-bold text-base text-foreground">Legal AI Assistant</h3>
                 </div>
-                <span className="text-[10px] font-mono bg-primary text-primary-foreground px-2.5 py-1 rounded-full uppercase font-bold tracking-wider">
-                    Hybrid RAG
-                </span>
+                
             </div>
 
             {/* Messages — scrollable area */}

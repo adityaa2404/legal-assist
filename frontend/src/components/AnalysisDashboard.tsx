@@ -1,6 +1,6 @@
 import React from 'react';
 import { useSession } from '@/hooks/useSession';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Icon from './ui/icon';
 import { Skeleton } from './ui/skeleton';
 import DisclaimerBanner from './DisclaimerBanner';
@@ -27,8 +27,9 @@ function formatStatTime(ms: number): string {
 }
 
 const AnalysisDashboard: React.FC = () => {
-    const { analysis, session, setAnalysis } = useSession();
+    const { analysis, session, setAnalysis, isHistoryView } = useSession();
     const { toast } = useToast();
+    const navigate = useNavigate();
     const [downloading, setDownloading] = React.useState(false);
     const [reanalyzing, setReanalyzing] = React.useState(false);
     const [processingStats, setProcessingStats] = React.useState<ProcessingStats | null>(() => {
@@ -223,6 +224,15 @@ const AnalysisDashboard: React.FC = () => {
                     </div>
                 </div>
 
+                {isHistoryView ? (
+                    <button
+                        onClick={() => navigate('/upload')}
+                        className="bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-bold flex items-center space-x-2 hover:opacity-90 transition-all"
+                    >
+                        <Icon name="upload_file" size="sm" />
+                        <span>Re-upload to Chat</span>
+                    </button>
+                ) : (
                 <div className="flex items-center gap-2">
                 <button
                     onClick={handleReanalyze}
@@ -259,9 +269,19 @@ const AnalysisDashboard: React.FC = () => {
                             Summary Report
                         </DropdownMenuItem>
                     </DropdownMenuContent>
-                </DropdownMenu>
+                    </DropdownMenu>
                 </div>
+                )}
             </div>
+
+            {isHistoryView && (
+                <div className="history-session-notice flex items-start gap-2.5 px-4 py-3 rounded-lg text-sm font-medium shadow-sm">
+                    <span className="history-session-notice-icon mt-0.5 shrink-0">
+                        <Icon name="info" size="sm" />
+                    </span>
+                    <span>This is a saved analysis. Re-upload the original document to chat with it or generate a new report.</span>
+                </div>
+            )}
 
             {/* Disclaimer */}
             <DisclaimerBanner />

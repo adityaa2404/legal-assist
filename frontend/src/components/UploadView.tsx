@@ -380,10 +380,7 @@ const UploadView: React.FC = () => {
         <div className="min-h-[calc(100vh-200px)] pt-12 pb-24 px-6 md:px-12 lg:px-24 max-w-7xl mx-auto animate-fade-in">
             {/* Header */}
             <div className="mb-16 text-center">
-                <div className="inline-flex items-center space-x-2 glass-badge px-4 py-1.5 rounded-full mb-6">
-                    <Icon name="verified_user" size="sm" filled className="text-primary" />
-                    <span className="text-[11px] font-bold tracking-widest uppercase text-primary">PII Anonymized</span>
-                </div>
+                
                 <h1 className="font-headline text-5xl md:text-6xl font-extrabold tracking-tight text-on-surface mb-4">
                     Analyze Legal Documents.
                 </h1>
@@ -498,10 +495,7 @@ const UploadView: React.FC = () => {
                             <div>
                                 <p className="font-bold text-sm">AI Provider</p>
                                 <p className="text-xs text-on-surface-variant">
-                                    {aiProvider === 'gemini' ? 'Gemini 2.5 Flash — paid tier'
-                                    : aiProvider === 'groq' ? 'Groq DeepSeek-R1 — free, reasoning model'
-                                    : aiProvider === 'openai' ? 'GPT-4o-mini — OpenAI paid'
-                                    : 'Claude Haiku — best instruction following'}
+                                    {aiProvider === 'gemini'}
                                 </p>
                             </div>
                             <div className="flex items-center bg-surface-container-high p-1 rounded-lg">
@@ -517,42 +511,7 @@ const UploadView: React.FC = () => {
                                     <Icon name="auto_awesome" size="sm" />
                                     Gemini
                                 </button>
-                                <button
-                                    onClick={() => setAiProvider('groq')}
-                                    className={cn(
-                                        "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
-                                        aiProvider === 'groq'
-                                            ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
-                                            : "text-on-surface-variant hover:text-on-surface"
-                                    )}
-                                >
-                                    <Icon name="bolt" size="sm" />
-                                    Groq
-                                </button>
-                                <button
-                                    onClick={() => setAiProvider('openai')}
-                                    className={cn(
-                                        "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
-                                        aiProvider === 'openai'
-                                            ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
-                                            : "text-on-surface-variant hover:text-on-surface"
-                                    )}
-                                >
-                                    <Icon name="smart_toy" size="sm" />
-                                    OpenAI
-                                </button>
-                                <button
-                                    onClick={() => setAiProvider('claude')}
-                                    className={cn(
-                                        "px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5",
-                                        aiProvider === 'claude'
-                                            ? "bg-surface-container-lowest text-primary shadow-sm font-bold"
-                                            : "text-on-surface-variant hover:text-on-surface"
-                                    )}
-                                >
-                                    <Icon name="psychology" size="sm" />
-                                    Claude
-                                </button>
+                                
                             </div>
                         </div>
 

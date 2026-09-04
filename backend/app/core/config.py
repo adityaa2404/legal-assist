@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str           # Used for analysis (primary)
     GEMINI_HTOC_API_KEY: Optional[str] = None  # Separate key for HTOC + tree search
     GEMINI_CHAT_API_KEY: Optional[str] = None  # Separate key for chat
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
     GEMINI_TIMEOUT: int = 90  # seconds — max wait for any Gemini call
     GROQ_API_KEY: Optional[str] = None  # Fallback for Gemini 503/429
     OPEN_AI_API_KEY: Optional[str] = None  # Second fallback (GPT-4o-mini)

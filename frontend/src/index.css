@@ -161,6 +161,24 @@ body {
   border: 1px solid var(--c-border);
 }
 
+/* Saved-history actions are intentionally gated. Keep this notice high-contrast
+   independently of Tailwind's theme utilities, which use app colour tokens. */
+.history-session-notice {
+  background: #eff6ff !important;
+  border: 1px solid #93c5fd !important;
+  color: #172554 !important;
+}
+
+.history-session-notice-icon { color: #1d4ed8 !important; }
+
+.dark .history-session-notice {
+  background: #172554 !important;
+  border-color: #1d4ed8 !important;
+  color: #dbeafe !important;
+}
+
+.dark .history-session-notice-icon { color: #93c5fd !important; }
+
 /* Scrollbar */
 .custom-scrollbar::-webkit-scrollbar { width: 5px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
