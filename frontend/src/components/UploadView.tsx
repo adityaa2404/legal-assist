@@ -385,7 +385,7 @@ const UploadView: React.FC = () => {
                     Analyze Legal Documents.
                 </h1>
                 <p className="text-on-surface-variant text-lg max-w-2xl mx-auto">
-                    Upload your contracts or case files for instant risk assessment. PII is anonymized before any AI call. Your original file is deleted after your session expires — analysis results stay saved in your history.
+                    Upload your contracts or case files for instant risk assessment. PII is anonymized before any AI call.
                 </p>
             </div>
 
@@ -394,7 +394,7 @@ const UploadView: React.FC = () => {
                 <div className="lg:col-span-7 space-y-8">
                     {/* Dropzone */}
                     <div className="relative group">
-                        <div className="absolute -inset-1 bg-gradient-to-r from-primary-container to-secondary-container rounded-xl blur opacity-10 group-hover:opacity-20 transition duration-1000 group-hover:duration-200" />
+                        <div className="absolute -inset-1 bg-linear-to-r from-primary-container to-secondary-container rounded-xl blur opacity-10 group-hover:opacity-20 transition duration-1000 group-hover:duration-200" />
                         <div
                             className={cn(
                                 "relative border-2 border-dashed border-outline-variant/30 bg-surface-container-lowest rounded-xl p-12 text-center flex flex-col items-center transition-all hover:bg-surface-container-low",
