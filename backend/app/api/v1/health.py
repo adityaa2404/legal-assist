@@ -34,7 +34,12 @@ _WAKE_REQUEST_COOLDOWN_SECONDS = 600
 
 
 async def _check_worker() -> bool:
-    """Hit the worker Space's dummy HTTP listener directly."""
+    """
+    Hit the worker's existing health listener directly.
+
+    WORKER_URL is the worker base URL and the existing contract checks "/".
+    This preserves the previous production behavior.
+    """
     if not settings.WORKER_URL:
         logger.warning("Worker health check skipped: WORKER_URL is not set")
         return False

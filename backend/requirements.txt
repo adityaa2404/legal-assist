@@ -35,3 +35,5 @@ prometheus-fastapi-instrumentator
 python-Levenshtein
 rouge-score
 scikit-learn
+prometheus-client
+prometheus-fastapi-instrumentator
