@@ -36,12 +36,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Create backend subtree commit
+        run: |
+          BACKEND_SHA=$(git subtree split --prefix=backend HEAD)
+          echo "BACKEND_SHA=$BACKEND_SHA" >> "$GITHUB_ENV"
+          echo "Backend subtree commit: $BACKEND_SHA"
+
       - name: Deploy backend to API Space
         run: |
           git remote add hf-api "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_API_SPACE}.git"
-          git subtree push --prefix=backend hf-api main
+          git push --force hf-api "${BACKEND_SHA}:main"
 
       - name: Deploy backend to Worker Space
         run: |
           git remote add hf-worker "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_WORKER_SPACE}.git"
-          git subtree push --prefix=backend hf-worker main
+          git push --force hf-worker "${BACKEND_SHA}:main"
