@@ -38,7 +38,8 @@ jobs:
 
       - name: Create backend subtree commit
         run: |
-          BACKEND_SHA=$(git subtree split --prefix=backend HEAD)
+          git fetch origin main
+          BACKEND_SHA=$(git subtree split --prefix=backend origin/main)
           echo "BACKEND_SHA=$BACKEND_SHA" >> "$GITHUB_ENV"
           echo "Backend subtree commit: $BACKEND_SHA"
 
