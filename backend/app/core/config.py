@@ -14,42 +14,45 @@ class Settings(BaseSettings):
     MONGO_DB_NAME: str = "legal-assist"
 
     # CLERK config
-    CLERK_FRONTEND_API: str = "modest-rattler-9.clerk.accounts.dev"  # override in .env with your frontend API host
+    CLERK_FRONTEND_API: str = "modest-rattler-9.clerk.accounts.dev"
 
     # GEMINI config
-    GEMINI_API_KEY: str           # Used for analysis (primary)
-    GEMINI_HTOC_API_KEY: Optional[str] = None  # Separate key for HTOC + tree search
-    GEMINI_CHAT_API_KEY: Optional[str] = None  # Separate key for chat
+    GEMINI_API_KEY: str
+    GEMINI_HTOC_API_KEY: Optional[str] = None
+    GEMINI_CHAT_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.6-flash"
-    GEMINI_TIMEOUT: int = 90  # seconds — max wait for any Gemini call
-    GROQ_API_KEY: Optional[str] = None  # Fallback for Gemini 503/429
-    OPEN_AI_API_KEY: Optional[str] = None  # Second fallback (GPT-4o-mini)
-    ANTHROPIC_API_KEY: Optional[str] = None  # Claude (best quality)
+    GEMINI_TIMEOUT: int = 90
+    GROQ_API_KEY: Optional[str] = None
+    OPEN_AI_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
 
     # JWT config
-    JWT_SECRET: str = secrets.token_urlsafe(64)  # Auto-generate if not set
+    JWT_SECRET: str = secrets.token_urlsafe(64)
 
     # SESSION config
     SESSION_SECRET: str = secrets.token_urlsafe(64)
-    SESSION_TTL_SECONDS: int = 31536000  # 365 days
+    SESSION_TTL_SECONDS: int = 31536000
     ALLOWED_EXTENSIONS: List[str] = ["pdf", "docx"]
-    MAX_FILE_SIZE_MB: int = 15  # MongoDB BSON document cap is 16MB — document_files.pdf_bytes must fit under it
+    MAX_FILE_SIZE_MB: int = 15
 
-    # CORS config (prefer JSON string env, e.g. ["https://your-frontend.vercel.app"])
+    # CORS config
     CORS_ORIGINS: List[str] = ["http://localhost:5173"]
 
-    # OCR is now handled by PaddleOCR (local, no API key needed)
-
-    # REDIS / CELERY config (required in split-deployment: API + worker as separate services)
+    # REDIS / CELERY config
     REDIS_URL: str
-    WORKER_URL: Optional[str] = None  # worker Space's public URL — pinged by /health to co-wake it
+    WORKER_URL: Optional[str] = None
+
+    # RESEND config for visitor wake-request notifications
+    RESEND_API_KEY: Optional[str] = None
+    RESEND_FROM_EMAIL: str = "onboarding@resend.dev"
+    RESEND_TO_EMAIL: Optional[str] = None
 
     # RATE LIMIT config
     RATE_LIMIT_RPM: int = 300
 
-    # BM25 SEARCH config — thresholds calibrated via search_benchmark.py (P8)
-    BM25_LOW_THRESHOLD: float = 0.5    # below this → "low" confidence, triggers fallback
-    BM25_HIGH_THRESHOLD: float = 2.0   # above this → "high" confidence
+    # BM25 SEARCH config
+    BM25_LOW_THRESHOLD: float = 0.5
+    BM25_HIGH_THRESHOLD: float = 2.0
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
