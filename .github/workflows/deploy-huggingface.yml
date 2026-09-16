@@ -1,22 +1,23 @@
-name: Deploy backend to Hugging Face Spaces
+name: Deploy API to Hugging Face
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  deploy:
+  deploy-api:
+    name: Deploy API Space
     runs-on: ubuntu-latest
+
     env:
       HF_USERNAME: aadityaa2404
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_API_SPACE: la-space
-      HF_WORKER_SPACE: la-space-worker
 
     steps:
       - name: Checkout repository
@@ -36,19 +37,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Create backend subtree commit
+      - name: Create API backend subtree
         run: |
-          git fetch origin main
-          BACKEND_SHA=$(git subtree split --prefix=backend origin/main)
-          echo "BACKEND_SHA=$BACKEND_SHA" >> "$GITHUB_ENV"
-          echo "Backend subtree commit: $BACKEND_SHA"
+          API_SHA=$(git subtree split --prefix=backend HEAD)
+          echo "API backend subtree: $API_SHA"
+          echo "API_SHA=$API_SHA" >> "$GITHUB_ENV"
 
-      - name: Deploy backend to API Space
+      - name: Deploy API backend to Hugging Face
         run: |
-          git remote add hf-api "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_API_SPACE}.git"
-          git push --force hf-api "${BACKEND_SHA}:main"
+          git remote add hf-api \
+            "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_API_SPACE}.git"
 
-      - name: Deploy backend to Worker Space
-        run: |
-          git remote add hf-worker "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_WORKER_SPACE}.git"
-          git push --force hf-worker "${BACKEND_SHA}:main"
+          git push --force hf-api "${API_SHA}:main"
