@@ -9,6 +9,8 @@ from app.core.config import settings
 # - heartbeat_sent
 # - worker_ready
 from app.core import observability  # noqa: F401
+from app.core import task_correlation  # noqa: F401
+from app.core import service_observability  # noqa: F401
 
 
 celery = Celery(

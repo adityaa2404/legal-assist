@@ -8,6 +8,8 @@ from app.core.config import settings
 from app.core.database import create_indexes, close_mongo_connection, get_database
 from app.api.v1.router import api_router
 from app.core.observability import configure_logging, log_event, new_request_id, request_id_ctx, session_id_ctx
+from app.core.service_observability import install_service_instrumentation
+from app.core import task_correlation  # noqa: F401
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from prometheus_fastapi_instrumentator import Instrumentator
 from starlette.responses import Response
@@ -37,6 +39,7 @@ async def _recover_stuck_sessions():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_indexes()
+    install_service_instrumentation()
     if not os.environ.get("JWT_SECRET"):
         log_event(logger, logging.WARNING, "missing_secret_configuration", secret="JWT_SECRET")
     if not os.environ.get("SESSION_SECRET"):
