@@ -1,0 +1,47 @@
+name: Deploy backend to Hugging Face Spaces
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HF_USERNAME: aadityaa2404
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_API_SPACE: la-space
+      HF_WORKER_SPACE: la-space-worker
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Hugging Face token
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN GitHub secret is not configured."
+            exit 1
+          fi
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy backend to API Space
+        run: |
+          git remote add hf-api "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_API_SPACE}.git"
+          git subtree push --prefix=backend hf-api main
+
+      - name: Deploy backend to Worker Space
+        run: |
+          git remote add hf-worker "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_WORKER_SPACE}.git"
+          git subtree push --prefix=backend hf-worker main
