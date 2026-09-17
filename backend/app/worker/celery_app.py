@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core import observability  # noqa: F401
 from app.core import task_correlation  # noqa: F401
 from app.core import service_observability  # noqa: F401
+from app.core import direct_observability  # noqa: F401
 
 
 celery = Celery(
