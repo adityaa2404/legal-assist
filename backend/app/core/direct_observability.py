@@ -1,9 +1,9 @@
 """Direct instrumentation for the core Legal Assist service paths.
 
-The existing runtime instrumentation is intentionally left in place for
-compatibility, but these subclasses make the critical worker/API metrics
-independent of runtime method wrapping. They call the real service methods and
-emit Prometheus metrics around the actual execution paths.
+This module makes the core LLM, OCR, and PII metrics independent of the
+runtime monkey-patching layer. It also enforces the application's current
+Gemini-only policy for all instrumented service calls and disables non-Gemini
+fallback helpers so metrics cannot report a fallback result as Gemini success.
 """
 
 from __future__ import annotations
@@ -39,6 +39,20 @@ def _provider_from_call(
         return "gemini"
 
 
+def _call_gemini_only(
+    fn: Callable[..., Any],
+    self_obj: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    """Call a provider-aware method with provider forcibly set to Gemini."""
+    signature = inspect.signature(fn)
+    bound = signature.bind(self_obj, *args, **kwargs)
+    if "provider" in signature.parameters:
+        bound.arguments["provider"] = "gemini"
+    return fn(*bound.args, **bound.kwargs)
+
+
 def _mark_instrumented(fn: Callable[..., Any]) -> Callable[..., Any]:
     fn._legal_assist_observability_wrapped = True
     return fn
@@ -48,127 +62,137 @@ def _build_instrumented_gemini_client(base_cls: type) -> type:
     class InstrumentedGeminiClient(base_cls):
         async def analyze_document(self, *args, **kwargs):
             original = _raw_method(base_cls, "analyze_document")
-            provider = _provider_from_call(original, self, args, kwargs)
             started = time.perf_counter()
             try:
-                result = await original(self, *args, **kwargs)
+                result = await _call_gemini_only(original, self, args, kwargs)
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="analysis",
-                    outcome="success",
+                    provider="gemini", purpose="analysis", outcome="success"
                 ).inc()
                 return result
             except Exception:
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="analysis",
-                    outcome="error",
+                    provider="gemini", purpose="analysis", outcome="error"
                 ).inc()
                 raise
             finally:
                 llm_call_duration_seconds.labels(
-                    provider=provider,
-                    purpose="analysis",
+                    provider="gemini", purpose="analysis"
                 ).observe(time.perf_counter() - started)
 
         async def generate_json(self, *args, **kwargs):
             original = _raw_method(base_cls, "generate_json")
-            provider = _provider_from_call(original, self, args, kwargs)
             started = time.perf_counter()
             try:
-                result = await original(self, *args, **kwargs)
+                result = await _call_gemini_only(original, self, args, kwargs)
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="generate_json",
-                    outcome="success",
+                    provider="gemini", purpose="generate_json", outcome="success"
                 ).inc()
                 return result
             except Exception:
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="generate_json",
-                    outcome="error",
+                    provider="gemini", purpose="generate_json", outcome="error"
                 ).inc()
                 raise
             finally:
                 llm_call_duration_seconds.labels(
-                    provider=provider,
-                    purpose="generate_json",
+                    provider="gemini", purpose="generate_json"
                 ).observe(time.perf_counter() - started)
 
         async def chat(self, *args, **kwargs):
             original = _raw_method(base_cls, "chat")
-            provider = _provider_from_call(original, self, args, kwargs)
             started = time.perf_counter()
             try:
-                result = await original(self, *args, **kwargs)
+                result = await _call_gemini_only(original, self, args, kwargs)
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="chat",
-                    outcome="success",
+                    provider="gemini", purpose="chat", outcome="success"
                 ).inc()
                 return result
             except Exception:
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="chat",
-                    outcome="error",
+                    provider="gemini", purpose="chat", outcome="error"
                 ).inc()
                 raise
             finally:
                 llm_call_duration_seconds.labels(
-                    provider=provider,
-                    purpose="chat",
+                    provider="gemini", purpose="chat"
                 ).observe(time.perf_counter() - started)
 
         async def chat_with_context(self, *args, **kwargs):
             original = _raw_method(base_cls, "chat_with_context")
-            provider = _provider_from_call(original, self, args, kwargs)
             started = time.perf_counter()
             try:
-                result = await original(self, *args, **kwargs)
+                result = await _call_gemini_only(original, self, args, kwargs)
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="chat_with_context",
-                    outcome="success",
+                    provider="gemini", purpose="chat_with_context", outcome="success"
                 ).inc()
                 return result
             except Exception:
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="chat_with_context",
-                    outcome="error",
+                    provider="gemini", purpose="chat_with_context", outcome="error"
                 ).inc()
                 raise
             finally:
                 llm_call_duration_seconds.labels(
-                    provider=provider,
-                    purpose="chat_with_context",
+                    provider="gemini", purpose="chat_with_context"
                 ).observe(time.perf_counter() - started)
 
         async def ocr_page_image(self, *args, **kwargs):
             original = _raw_method(base_cls, "ocr_page_image")
-            provider = _provider_from_call(original, self, args, kwargs)
             started = time.perf_counter()
             try:
                 result = await original(self, *args, **kwargs)
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="ocr",
-                    outcome="success",
+                    provider="gemini", purpose="ocr", outcome="success"
                 ).inc()
                 return result
             except Exception:
                 llm_calls_total.labels(
-                    provider=provider,
-                    purpose="ocr",
-                    outcome="error",
+                    provider="gemini", purpose="ocr", outcome="error"
                 ).inc()
                 raise
             finally:
                 llm_call_duration_seconds.labels(
-                    provider=provider,
-                    purpose="ocr",
+                    provider="gemini", purpose="ocr"
+                ).observe(time.perf_counter() - started)
+
+        async def chat_stream(self, *args, **kwargs):
+            original = _raw_method(base_cls, "chat_stream")
+            started = time.perf_counter()
+            try:
+                stream = _call_gemini_only(original, self, args, kwargs)
+                async for chunk in stream:
+                    yield chunk
+                llm_calls_total.labels(
+                    provider="gemini", purpose="chat_stream", outcome="success"
+                ).inc()
+            except Exception:
+                llm_calls_total.labels(
+                    provider="gemini", purpose="chat_stream", outcome="error"
+                ).inc()
+                raise
+            finally:
+                llm_call_duration_seconds.labels(
+                    provider="gemini", purpose="chat_stream"
+                ).observe(time.perf_counter() - started)
+
+        async def chat_with_context_stream(self, *args, **kwargs):
+            original = _raw_method(base_cls, "chat_with_context_stream")
+            started = time.perf_counter()
+            try:
+                stream = _call_gemini_only(original, self, args, kwargs)
+                async for chunk in stream:
+                    yield chunk
+                llm_calls_total.labels(
+                    provider="gemini", purpose="chat_with_context_stream", outcome="success"
+                ).inc()
+            except Exception:
+                llm_calls_total.labels(
+                    provider="gemini", purpose="chat_with_context_stream", outcome="error"
+                ).inc()
+                raise
+            finally:
+                llm_call_duration_seconds.labels(
+                    provider="gemini", purpose="chat_with_context_stream"
                 ).observe(time.perf_counter() - started)
 
     InstrumentedGeminiClient.__name__ = base_cls.__name__
@@ -180,8 +204,11 @@ def _build_instrumented_gemini_client(base_cls: type) -> type:
         "chat",
         "chat_with_context",
         "ocr_page_image",
+        "chat_stream",
+        "chat_with_context_stream",
     ):
-        _mark_instrumented(getattr(InstrumentedGeminiClient, name))
+        if hasattr(InstrumentedGeminiClient, name):
+            _mark_instrumented(getattr(InstrumentedGeminiClient, name))
 
     return InstrumentedGeminiClient
 
@@ -218,7 +245,6 @@ def _build_instrumented_parser(base_cls: type) -> type:
 def _build_instrumented_pii(base_cls: type) -> type:
     class InstrumentedPIIAnonymizer(base_cls):
         def _anonymize_with_presidio(self, *args, **kwargs):
-            # Bypass the legacy runtime wrapper so entities are counted once.
             original = _raw_method(base_cls, "_anonymize_with_presidio")
             return original(self, *args, **kwargs)
 
@@ -246,8 +272,25 @@ def _replace_binding(module_name: str, class_name: str, replacement: type) -> No
         setattr(module, class_name, replacement)
 
 
+def _disable_non_gemini_helpers(gemini_module: Any) -> None:
+    """Disable non-Gemini backends so fallback/provider drift is impossible."""
+    def _disabled(*_args, **_kwargs):
+        raise RuntimeError("Gemini-only mode: non-Gemini provider disabled")
+
+    for name in (
+        "_groq_generate_json_sync",
+        "_groq_chat_sync",
+        "_openai_generate_json_sync",
+        "_openai_chat_sync",
+        "_claude_generate_json_sync",
+        "_claude_chat_sync",
+    ):
+        if hasattr(gemini_module, name):
+            setattr(gemini_module, name, _disabled)
+
+
 def install_direct_observability() -> None:
-    """Replace service exports before Celery/API paths create instances."""
+    """Replace service exports before API/Celery paths create instances."""
     from app.services.gemini_client import GeminiClient
     from app.services.document_parser import DocumentParser
     from app.services.pii_anonymizer import PIIAnonymizer
@@ -263,15 +306,28 @@ def install_direct_observability() -> None:
     gemini_module.GeminiClient = instrumented_gemini
     parser_module.DocumentParser = instrumented_parser
     pii_module.PIIAnonymizer = instrumented_pii
+    _disable_non_gemini_helpers(gemini_module)
 
-    # These modules can already be partially imported when celery_app is reached.
-    _replace_binding("app.api.v1.documents", "GeminiClient", instrumented_gemini)
-    _replace_binding("app.api.v1.documents", "DocumentParser", instrumented_parser)
-    _replace_binding("app.api.v1.documents", "PIIAnonymizer", instrumented_pii)
-
-    _replace_binding("app.core.dependencies", "GeminiClient", instrumented_gemini)
-    _replace_binding("app.core.dependencies", "DocumentParser", instrumented_parser)
-    _replace_binding("app.core.dependencies", "PIIAnonymizer", instrumented_pii)
+    # Patch already-imported bindings as well as future imports.
+    bindings = (
+        ("app.api.v1.documents", "GeminiClient"),
+        ("app.api.v1.documents", "DocumentParser"),
+        ("app.api.v1.documents", "PIIAnonymizer"),
+        ("app.api.v1.chat", "GeminiClient"),
+        ("app.api.v1.chat", "PIIAnonymizer"),
+        ("app.api.v1.analysis", "GeminiClient"),
+        ("app.api.v1.analysis", "PIIAnonymizer"),
+        ("app.core.dependencies", "GeminiClient"),
+        ("app.core.dependencies", "DocumentParser"),
+        ("app.core.dependencies", "PIIAnonymizer"),
+    )
+    replacements = {
+        "GeminiClient": instrumented_gemini,
+        "DocumentParser": instrumented_parser,
+        "PIIAnonymizer": instrumented_pii,
+    }
+    for module_name, class_name in bindings:
+        _replace_binding(module_name, class_name, replacements[class_name])
 
 
 install_direct_observability()
