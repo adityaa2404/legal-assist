@@ -14,6 +14,21 @@ import os
 
 src = Path("/app/prometheus.yml.template").read_text()
 
+# ---------------------------------------------------------------------------
+# API scrape target
+# ---------------------------------------------------------------------------
+
+api_port = os.getenv("PORT", "7860").strip()
+
+if not api_port:
+    raise SystemExit("PORT must be set")
+
+api_scrape_target = f"127.0.0.1:{api_port}"
+
+# ---------------------------------------------------------------------------
+# Optional worker scrape target
+# ---------------------------------------------------------------------------
+
 worker_target = os.getenv("WORKER_METRICS_TARGET", "").strip()
 worker_block = ""
 
@@ -46,6 +61,10 @@ if worker_target:
       - targets:
           - {parsed.hostname}{port}
 """
+
+# ---------------------------------------------------------------------------
+# Optional Grafana Cloud remote_write
+# ---------------------------------------------------------------------------
 
 remote_url = os.getenv(
     "GRAFANA_CLOUD_REMOTE_WRITE_URL",
@@ -83,7 +102,16 @@ if any((remote_url, remote_user, remote_password)):
       password: {q(remote_password)}
 """
 
+# ---------------------------------------------------------------------------
+# Build final Prometheus configuration
+# ---------------------------------------------------------------------------
+
 out = src.replace(
+    "__API_SCRAPE_TARGET__",
+    api_scrape_target
+)
+
+out = out.replace(
     "__WORKER_SCRAPE_BLOCK__",
     worker_block.rstrip()
 )
@@ -95,6 +123,10 @@ out = out.replace(
 
 Path("/tmp/prometheus.yml").write_text(out)
 PY
+
+# ---------------------------------------------------------------------------
+# Start Prometheus
+# ---------------------------------------------------------------------------
 
 prometheus \
   --config.file="$PROM_CONFIG" \
@@ -131,11 +163,19 @@ if [ "$PROM_READY" != "true" ]; then
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
+
 cleanup() {
     kill -TERM "$PROM_PID" 2>/dev/null || true
 }
 
 trap cleanup INT TERM EXIT
+
+# ---------------------------------------------------------------------------
+# Start FastAPI
+# ---------------------------------------------------------------------------
 
 uvicorn app.main:app \
   --host 0.0.0.0 \
