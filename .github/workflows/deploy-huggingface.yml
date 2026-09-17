@@ -1,4 +1,4 @@
-name: Deploy API to Hugging Face
+name: Deploy Legal Assist to Hugging Face
 
 on:
   push:
@@ -37,15 +37,75 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Create API backend subtree
-        run: |
-          API_SHA=$(git subtree split --prefix=backend HEAD)
-          echo "API backend subtree: $API_SHA"
-          echo "API_SHA=$API_SHA" >> "$GITHUB_ENV"
-
       - name: Deploy API backend to Hugging Face
         run: |
           git remote add hf-api \
             "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_API_SPACE}.git"
 
-          git push --force hf-api "${API_SHA}:main"
+          git subtree push --prefix=backend hf-api main
+
+
+  deploy-worker:
+    name: Deploy Worker Space
+    runs-on: ubuntu-latest
+
+    env:
+      HF_USERNAME: aadityaa2404
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_WORKER_SPACE: la-space-worker
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Hugging Face token
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN GitHub secret is not configured."
+            exit 1
+          fi
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Clone existing Worker Space
+        run: |
+          git clone \
+            "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_WORKER_SPACE}.git" \
+            worker-build
+
+      - name: Update Worker Space files
+        run: |
+          rsync -a --delete \
+            --exclude ".git/" \
+            --exclude "README.md" \
+            backend/ worker-build/
+
+          cd worker-build
+
+          # The worker Space must use Dockerfile.worker as Dockerfile.
+          rm -f Dockerfile
+          mv Dockerfile.worker Dockerfile
+
+          echo "Worker Space contents:"
+          ls -la
+
+      - name: Commit Worker Space changes
+        run: |
+          cd worker-build
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "Worker Space is already up to date."
+            exit 0
+          fi
+
+          git commit -m "deploy: update worker from main"
+
+      - name: Push Worker Space to Hugging Face
+        run: |
+          cd worker-build
+          git push origin HEAD:main
