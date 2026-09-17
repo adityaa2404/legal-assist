@@ -29,7 +29,11 @@ celery[redis]
 redis
 dnspython
 easyocr
+prometheus-client
+prometheus-fastapi-instrumentator
 # evaluation dependencies
 python-Levenshtein
 rouge-score
 scikit-learn
+prometheus-client
+prometheus-fastapi-instrumentator

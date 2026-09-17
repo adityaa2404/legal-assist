@@ -21,3 +21,5 @@ weasyprint
 pytz
 matplotlib
 jinja2
+prometheus-client
+prometheus-fastapi-instrumentator

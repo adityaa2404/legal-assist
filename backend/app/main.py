@@ -7,33 +7,22 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.core.database import create_indexes, close_mongo_connection, get_database
 from app.api.v1.router import api_router
+from app.core.observability import configure_logging, log_event, new_request_id, request_id_ctx, session_id_ctx
+from app.core.service_observability import install_service_instrumentation
+from app.core import task_correlation  # noqa: F401
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_fastapi_instrumentator import Instrumentator
+from starlette.responses import Response
 import os
 import time
 import uvicorn
 import logging
 
-
-def _resolve_log_level() -> int:
-    level_name = os.getenv("LOG_LEVEL", "WARNING").upper()
-    return getattr(logging, level_name, logging.WARNING)
-
-# Production logging: default to warnings/errors only unless LOG_LEVEL says otherwise.
-logging.basicConfig(
-    level=_resolve_log_level(),
-    format="%(asctime)s  %(levelname)-5s  %(name)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
-# Silence noisy third-party loggers
-for noisy in ("httpx", "httpcore", "google", "urllib3", "motor", "pymongo", "presidio", "fontTools", "weasyprint"):
-    logging.getLogger(noisy).setLevel(logging.WARNING)
-
+configure_logging()
 logger = logging.getLogger(__name__)
-
 limiter = Limiter(key_func=get_remote_address)
 
-
 async def _recover_stuck_sessions():
-    """Mark sessions stuck in 'processing' for >30 minutes as 'failed'."""
     try:
         from datetime import datetime, timedelta, timezone
         db = get_database()
@@ -43,71 +32,62 @@ async def _recover_stuck_sessions():
             {"$set": {"htoc_status": "failed"}},
         )
         if result.modified_count:
-            logger.warning("Recovered %d stuck sessions (processing > 30 min)", result.modified_count)
-    except Exception as e:
-        logger.error("Failed to recover stuck sessions: %s", e)
-
+            log_event(logger, logging.WARNING, "stuck_sessions_recovered", recovered=result.modified_count)
+    except Exception:
+        logger.exception("Failed to recover stuck sessions")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create indexes, verify Atlas connection
     await create_indexes()
-
-    # Warn about auto-generated secrets
+    install_service_instrumentation()
     if not os.environ.get("JWT_SECRET"):
-        logger.warning("JWT_SECRET not set in .env — auto-generated. All user tokens will invalidate on restart!")
+        log_event(logger, logging.WARNING, "missing_secret_configuration", secret="JWT_SECRET")
     if not os.environ.get("SESSION_SECRET"):
-        logger.warning("SESSION_SECRET not set in .env — auto-generated. Sessions will break on restart!")
-
-    # Warn about dev CORS origins in production
-    dev_origins = [o for o in settings.CORS_ORIGINS if "localhost" in o]
-    if dev_origins and any("https://" in o for o in settings.CORS_ORIGINS):
-        logger.warning("CORS allows localhost origins alongside production domains: %s", dev_origins)
-
-    # Clean up stuck sessions from previous crashes
+        log_event(logger, logging.WARNING, "missing_secret_configuration", secret="SESSION_SECRET")
     await _recover_stuck_sessions()
-
+    log_event(logger, logging.INFO, "application_started")
     yield
-    # Shutdown: close MongoDB connection
     await close_mongo_connection()
+    log_event(logger, logging.INFO, "application_stopped")
 
-
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    lifespan=lifespan,
-)
-
-# Set up CORS
+app = FastAPI(title=settings.PROJECT_NAME, openapi_url=f"{settings.API_V1_STR}/openapi.json", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Session-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Session-ID", "X-Request-ID"],
 )
 
-# Log method, path, status code, and latency for every request
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = (time.perf_counter() - start) * 1000
-    logger.info(
-        "%s %s %d %.1fms",
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration_ms,
-    )
-    return response
+async def observability_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or new_request_id()
+    session_id = request.headers.get("X-Session-ID")
+    request_token = request_id_ctx.set(request_id)
+    session_token = session_id_ctx.set(session_id)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        response.headers["X-Request-ID"] = request_id
+        log_event(logger, logging.INFO, "http_request_completed", method=request.method, path=request.url.path, status_code=response.status_code, duration_ms=duration_ms)
+        return response
+    except Exception:
+        log_event(logger, logging.ERROR, "http_request_failed", method=request.method, path=request.url.path)
+        logger.exception("Unhandled request exception")
+        raise
+    finally:
+        request_id_ctx.reset(request_token)
+        session_id_ctx.reset(session_token)
 
-# Set up Rate Limiter
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 @app.get("/")
 async def root():

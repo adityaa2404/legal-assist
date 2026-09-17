@@ -34,7 +34,12 @@ _WAKE_REQUEST_COOLDOWN_SECONDS = 600
 
 
 async def _check_worker() -> bool:
-    """Hit the worker Space's dummy HTTP listener directly."""
+    """
+    Hit the worker's existing health listener directly.
+
+    WORKER_URL is the worker base URL and the existing contract checks "/".
+    This preserves the previous production behavior.
+    """
     if not settings.WORKER_URL:
         logger.warning("Worker health check skipped: WORKER_URL is not set")
         return False
@@ -136,10 +141,12 @@ async def request_worker_wake(payload: WakeRequest):
     if remaining > 0:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="A wake request was already sent recently. Please try again later.",
+            detail=(
+                "A wake request was already sent recently. "
+                "Please try again later."
+            ),
         )
 
-    # The message is optional. Escape it before placing it into the HTML email.
     safe_message = html.escape(payload.message.strip())
 
     message_html = (
@@ -183,7 +190,10 @@ async def request_worker_wake(payload: WakeRequest):
 
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The wake request could not be sent. Please try again later.",
+            detail=(
+                "The wake request could not be sent. "
+                "Please try again later."
+            ),
         ) from exc
 
     except httpx.HTTPError as exc:
@@ -191,7 +201,10 @@ async def request_worker_wake(payload: WakeRequest):
 
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The wake request could not be sent. Please try again later.",
+            detail=(
+                "The wake request could not be sent. "
+                "Please try again later."
+            ),
         ) from exc
 
     _last_wake_request_at = now

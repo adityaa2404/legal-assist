@@ -1,0 +1,11 @@
+groups:
+  - name: legal-assist-worker
+    rules:
+      - alert: LegalAssistWorkerBacklogStalled
+        expr: legal_assist_celery_queue_waiting_tasks > 0 and legal_assist_celery_oldest_task_age_seconds > 300 and legal_assist_worker_heartbeat_age_seconds > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Legal Assist worker backlog is stalled
+          description: Tasks are waiting while the worker heartbeat is stale. Check the Celery worker and Redis connectivity.
