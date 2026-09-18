@@ -25,8 +25,10 @@ Never log document text, prompts, model responses, access tokens, authorization 
 
 ## Alert semantics
 
-`LegalAssistWorkerBacklogStalled` fires only when tasks are waiting, the oldest task is older than five minutes, and the worker heartbeat is stale for more than two minutes. A sleeping worker with an empty queue is not treated as an incident.
+The worker alerting rules focus on task-level failures. Queue depth/age and Celery heartbeat metrics are intentionally not collected from Redis because continuously polling the Celery broker adds unnecessary command traffic.
 
 ## Required worker integration
 
-The worker process should expose the Prometheus registry on port `9100`, update the heartbeat gauge periodically, update queue gauges from Redis, and increment task counters from Celery task lifecycle signals. The API metrics endpoint is exposed at `/metrics`.
+The worker process should expose the Prometheus registry on port `9100` and increment task counters from Celery task lifecycle signals. LLM, OCR, PII, HTOC, BM25, and task latency metrics remain available through the worker `/metrics` endpoint. The API metrics endpoint is exposed at `/metrics`.
+
+The worker intentionally does not run a Redis-backed queue metrics polling loop or Celery heartbeat solely for observability. This keeps the observability layer from adding steady broker traffic when the worker is awake.
