@@ -92,6 +92,7 @@ def process_document(
     except SoftTimeLimitExceeded:
         logger.error("Soft time limit exceeded for session %s", session_id)
         _run(session_service.set_htoc_status(session_id, "failed"))
+        raise
     except Exception as exc:
         logger.error("Task failed for session %s: %s", session_id, exc)
         _run(session_service.set_htoc_status(session_id, "failed"))
@@ -139,6 +140,7 @@ def build_htoc_bm25(
     except SoftTimeLimitExceeded:
         logger.error("Soft time limit exceeded building HTOC for session %s", session_id)
         _run(session_service.set_htoc_status(session_id, "failed"))
+        raise
     except Exception as exc:
         logger.error("HTOC/BM25 task failed for session %s: %s", session_id, exc)
         _run(session_service.set_htoc_status(session_id, "failed"))
@@ -191,10 +193,11 @@ def generate_report(self, session_id: str, report_type: str):
     except SoftTimeLimitExceeded:
         logger.error("Soft time limit exceeded generating report for session %s", session_id)
         _run(session_service.set_report_status(session_id, report_type, "failed"))
+        raise
     except Exception as exc:
         # A rendering error must be terminal for this report. Retrying a missing
         # native WeasyPrint dependency or a malformed template only repeats the
         # same failure and can destabilize the limited worker container.
         logger.exception("Report generation failed for session %s", session_id)
         _run(session_service.set_report_status(session_id, report_type, "failed"))
-        return {"status": "failed", "error": str(exc)}
+        raise
