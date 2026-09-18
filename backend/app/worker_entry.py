@@ -77,7 +77,6 @@ def _configure_prometheus_multiprocess() -> Path:
 
 PROMETHEUS_DIR = _configure_prometheus_multiprocess()
 
-
 # Import these only after PROMETHEUS_MULTIPROC_DIR has been configured.
 from prometheus_client import CONTENT_TYPE_LATEST
 from prometheus_client import CollectorRegistry
@@ -300,7 +299,8 @@ def build_celery_command() -> list[str]:
     """
     Build the Celery worker command.
 
-    Heartbeat MUST remain enabled because worker heartbeat metrics rely on it.
+    Heartbeat is disabled because this deployment does not use Celery
+    heartbeat events for observability, avoiding unnecessary broker traffic.
     """
 
     celery_args = [
@@ -316,7 +316,8 @@ def build_celery_command() -> list[str]:
         "--without-gossip",
         "--without-mingle",
 
-        # Do NOT use --without-heartbeat.
+        # Queue/heartbeat observability does not require Celery heartbeats.
+        "--without-heartbeat",
     ]
 
     # Keep the existing pool strategy.
