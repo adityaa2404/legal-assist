@@ -7,23 +7,16 @@ import json
 import logging
 import os
 import socket
-import threading
 import time
 import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-import redis
 from celery.signals import (
-    before_task_publish,
-    heartbeat_sent,
     task_postrun,
     task_prerun,
-    worker_ready,
 )
 from prometheus_client import Counter, Gauge, Histogram
-
-from app.core.config import settings
 
 
 # ---------------------------------------------------------------------------
@@ -244,24 +237,6 @@ celery_task_duration_seconds = Histogram(
     ["task_name"],
 )
 
-celery_queue_waiting = Gauge(
-    "legal_assist_celery_queue_waiting_tasks",
-    "Waiting Celery tasks",
-    multiprocess_mode="max",
-)
-
-celery_oldest_task_age_seconds = Gauge(
-    "legal_assist_celery_oldest_task_age_seconds",
-    "Age of oldest waiting task",
-    multiprocess_mode="max",
-)
-
-worker_heartbeat_age_seconds = Gauge(
-    "legal_assist_worker_heartbeat_age_seconds",
-    "Worker heartbeat age",
-    multiprocess_mode="max",
-)
-
 active_sessions = Gauge(
     "legal_assist_active_sessions",
     "Active sessions",
@@ -275,93 +250,11 @@ sessions_expired_total = Counter(
 
 
 # ---------------------------------------------------------------------------
-# Celery queue tracking
+# Celery execution metrics
 # ---------------------------------------------------------------------------
-
-_QUEUE_TRACKING_KEY = "legal_assist:celery:task_enqueue_times"
-
-_QUEUE_TRACKING_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 _task_start_times: dict[str, float] = {}
 
-_last_heartbeat_at = time.time()
-
-_queue_metrics_thread_started = False
-_heartbeat_metrics_thread_started = False
-
-
-_redis_client: redis.Redis | None = None
-
-
-def _get_redis_client() -> redis.Redis:
-    """
-    Lazily create a Redis client.
-
-    Observability failures must never break application functionality.
-    """
-
-    global _redis_client
-
-    if _redis_client is None:
-        _redis_client = redis.Redis.from_url(
-            settings.REDIS_URL,
-            decode_responses=False,
-        )
-
-    return _redis_client
-
-
-# ---------------------------------------------------------------------------
-# Celery publish tracking
-# ---------------------------------------------------------------------------
-
-@before_task_publish.connect
-def _track_task_published(
-    sender=None,
-    headers=None,
-    **kwargs,
-):
-    """
-    Record when a task enters the broker.
-
-    The Redis sorted set lets the worker calculate:
-        - queue depth
-        - oldest queued task age
-
-    No document/session contents are stored.
-    """
-
-    headers = headers or {}
-
-    task_id = (
-        headers.get("id")
-        or headers.get("task_id")
-    )
-
-    if not task_id:
-        return
-
-    try:
-        client = _get_redis_client()
-
-        client.zadd(
-            _QUEUE_TRACKING_KEY,
-            {
-                str(task_id): time.time(),
-            },
-        )
-
-    except Exception:
-        # Observability must never break task publishing.
-        logging.getLogger(__name__).debug(
-            "Unable to record Celery enqueue time",
-            exc_info=True,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Celery execution metrics
-# ---------------------------------------------------------------------------
 
 @task_prerun.connect
 def _task_started(
@@ -373,17 +266,6 @@ def _task_started(
         return
 
     _task_start_times[str(task_id)] = time.perf_counter()
-
-    try:
-        _get_redis_client().zrem(
-            _QUEUE_TRACKING_KEY,
-            str(task_id),
-        )
-    except Exception:
-        logging.getLogger(__name__).debug(
-            "Unable to remove Celery task from queue tracking",
-            exc_info=True,
-        )
 
 
 @task_postrun.connect
@@ -422,141 +304,3 @@ def _task_finished(
         ).observe(
             time.perf_counter() - start_time
         )
-
-    try:
-        _get_redis_client().zrem(
-            _QUEUE_TRACKING_KEY,
-            task_id,
-        )
-    except Exception:
-        logging.getLogger(__name__).debug(
-            "Unable to clean up Celery queue tracking",
-            exc_info=True,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Worker heartbeat
-# ---------------------------------------------------------------------------
-
-@heartbeat_sent.connect
-def _heartbeat_received(
-    sender=None,
-    **kwargs,
-):
-    global _last_heartbeat_at
-
-    _last_heartbeat_at = time.time()
-
-
-def _heartbeat_metrics_loop() -> None:
-    global _last_heartbeat_at
-
-    while True:
-        try:
-            worker_heartbeat_age_seconds.set(
-                max(
-                    0.0,
-                    time.time() - _last_heartbeat_at,
-                )
-            )
-        except Exception:
-            logging.getLogger(__name__).debug(
-                "Unable to update worker heartbeat metric",
-                exc_info=True,
-            )
-
-        time.sleep(5)
-
-
-# ---------------------------------------------------------------------------
-# Queue metrics
-# ---------------------------------------------------------------------------
-
-def _queue_metrics_loop() -> None:
-    while True:
-        try:
-            client = _get_redis_client()
-
-            now = time.time()
-
-            # Remove abandoned tracking entries that are older than the
-            # maximum observation window.
-            client.zremrangebyscore(
-                _QUEUE_TRACKING_KEY,
-                0,
-                now - _QUEUE_TRACKING_MAX_AGE_SECONDS,
-            )
-
-            waiting_count = client.zcard(
-                _QUEUE_TRACKING_KEY
-            )
-
-            celery_queue_waiting.set(
-                float(waiting_count)
-            )
-
-            oldest = client.zrange(
-                _QUEUE_TRACKING_KEY,
-                0,
-                0,
-                withscores=True,
-            )
-
-            if oldest:
-                oldest_timestamp = float(
-                    oldest[0][1]
-                )
-
-                celery_oldest_task_age_seconds.set(
-                    max(
-                        0.0,
-                        now - oldest_timestamp,
-                    )
-                )
-            else:
-                celery_oldest_task_age_seconds.set(0.0)
-
-        except Exception:
-            logging.getLogger(__name__).debug(
-                "Unable to update Celery queue metrics",
-                exc_info=True,
-            )
-
-            celery_queue_waiting.set(0.0)
-            celery_oldest_task_age_seconds.set(0.0)
-
-        time.sleep(5)
-
-
-@worker_ready.connect
-def _start_worker_observability(
-    sender=None,
-    **kwargs,
-):
-    """
-    Start background metric-updater threads once the worker is ready.
-
-    This runs in the Celery worker process rather than the API process.
-    """
-
-    global _queue_metrics_thread_started
-    global _heartbeat_metrics_thread_started
-
-    if not _heartbeat_metrics_thread_started:
-        _heartbeat_metrics_thread_started = True
-
-        threading.Thread(
-            target=_heartbeat_metrics_loop,
-            daemon=True,
-            name="heartbeat-metrics",
-        ).start()
-
-    if not _queue_metrics_thread_started:
-        _queue_metrics_thread_started = True
-
-        threading.Thread(
-            target=_queue_metrics_loop,
-            daemon=True,
-            name="queue-metrics",
-        ).start()
