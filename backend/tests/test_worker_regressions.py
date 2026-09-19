@@ -28,13 +28,17 @@ class FakeSessionService:
         self.report_statuses.append((session_id, report_type, status))
 
 
+class RetryRequested(Exception):
+    """Sentinel matching Celery's control-flow interruption for retry()."""
+
+
 class FakeTask:
     def __init__(self):
         self.retry_calls = []
 
     def retry(self, **kwargs):
         self.retry_calls.append(kwargs)
-        return "RETRY_SENT"
+        raise RetryRequested()
 
 
 def _install_worker_fakes(monkeypatch, session_service, inner):
@@ -106,16 +110,16 @@ def test_process_document_retries_transient_errors(monkeypatch):
     fake_task = FakeTask()
     monkeypatch.setattr(tasks.process_document, "retry", fake_task.retry)
 
-    result = tasks.process_document.run(
-        SESSION_ID,
-        "application/pdf",
-        "digital",
-        "en-IN",
-        "fast",
-        "gemini",
-    )
+    with pytest.raises(RetryRequested):
+        tasks.process_document.run(
+            SESSION_ID,
+            "application/pdf",
+            "digital",
+            "en-IN",
+            "fast",
+            "gemini",
+        )
 
-    assert result == "RETRY_SENT"
     assert session.htoc_statuses == [(SESSION_ID, "failed")]
     assert len(fake_task.retry_calls) == 1
     assert isinstance(fake_task.retry_calls[0]["exc"], RuntimeError)
@@ -124,18 +128,16 @@ def test_process_document_retries_transient_errors(monkeypatch):
 def test_generate_report_failures_are_terminal(monkeypatch):
     session = FakeSessionService()
 
-    async def fail(**kwargs):
+    async def fail(session_id, report_type):
         raise RuntimeError("render failed")
 
     monkeypatch.setattr(tasks, "_build_report", fail)
     monkeypatch.setattr("app.services.session_service.SessionService", lambda: session)
 
-    fake_task = FakeTask()
     with pytest.raises(RuntimeError, match="render failed"):
         tasks.generate_report.run(SESSION_ID, "full")
 
     assert session.report_statuses == [(SESSION_ID, "full", "failed")]
-    assert fake_task.retry_calls == []
 
 
 SESSION_ID = "00000000-0000-4000-8000-000000000001"
