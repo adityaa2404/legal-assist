@@ -1,6 +1,7 @@
 """Small regression tests for security and infrastructure invariants."""
 
 import asyncio
+import time
 
 from app.api.v1 import health as health_api
 from app.core import observability
@@ -42,9 +43,12 @@ def test_worker_health_status_is_cached_between_checks(monkeypatch):
         return True
 
     monkeypatch.setattr(health_api, "_check_worker", fake_check_worker)
-    monkeypatch.setattr(health_api.time, "monotonic", lambda: 100.0)
-    # Force the first call to perform a real check; its result should then be cached.
-    monkeypatch.setitem(health_api._worker_status_cache, "checked_at", 0.0)
+    # Make the cache stale so the first call checks the worker and caches its result.
+    monkeypatch.setitem(
+        health_api._worker_status_cache,
+        "checked_at",
+        time.monotonic() - health_api._WORKER_STATUS_TTL_SECONDS - 1,
+    )
     monkeypatch.setitem(health_api._worker_status_cache, "healthy", False)
 
     assert asyncio.run(health_api.get_worker_status()) is True
@@ -61,9 +65,12 @@ def test_forced_worker_health_check_bypasses_cache(monkeypatch):
         return calls > 1
 
     monkeypatch.setattr(health_api, "_check_worker", fake_check_worker)
-    monkeypatch.setattr(health_api.time, "monotonic", lambda: 100.0)
     # Seed a fresh cached result so the forced call is the only one that hits the worker.
-    monkeypatch.setitem(health_api._worker_status_cache, "checked_at", 100.0)
+    monkeypatch.setitem(
+        health_api._worker_status_cache,
+        "checked_at",
+        time.monotonic(),
+    )
     monkeypatch.setitem(health_api._worker_status_cache, "healthy", False)
 
     assert asyncio.run(health_api.get_worker_status()) is False
