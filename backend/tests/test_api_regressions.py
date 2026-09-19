@@ -9,7 +9,7 @@ from app.main import app
 from app.api.v1 import analysis as analysis_api
 from app.api.v1 import documents as documents_api
 
-from .conftest import FakePIIService, FakeSessionService, SESSION_ID, make_session
+from conftest import FakePIIService, FakeSessionService, SESSION_ID, make_session
 
 
 def _override_session_service(service):
