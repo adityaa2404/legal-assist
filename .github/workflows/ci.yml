@@ -157,7 +157,23 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
       - name: Start container
         run: |
-          docker run -d --name app --network host             -e MONGODB_URI -e MONGO_DB_NAME -e GEMINI_API_KEY             -e JWT_SECRET -e SESSION_SECRET -e REDIS_URL -e CORS_ORIGINS             legal-assist-${{ matrix.target }}:ci
+          args=(
+            -d
+            --name app
+            --network host
+            -e MONGODB_URI
+            -e MONGO_DB_NAME
+            -e GEMINI_API_KEY
+            -e JWT_SECRET
+            -e SESSION_SECRET
+            -e REDIS_URL
+            -e CORS_ORIGINS
+          )
+          if [ "${{ matrix.target }}" = "api" ]; then
+            args+=( -e "PORT=${API_PORT}" )
+          fi
+          args+=( "legal-assist-${{ matrix.target }}:ci" )
+          docker run "${args[@]}"
       - name: Smoke test API (/health)
         if: matrix.target == 'api'
         run: |
