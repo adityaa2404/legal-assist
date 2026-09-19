@@ -7,7 +7,6 @@ import pytest
 from app.core import dependencies
 from app.main import app
 from app.api.v1 import analysis as analysis_api
-from app.api.v1 import documents as documents_api
 
 from conftest import FakePIIService, FakeSessionService, SESSION_ID, make_session
 
@@ -146,7 +145,7 @@ def test_report_generation_is_idempotent_while_pending(authenticated_client, mon
     assert service.report_status_calls == 1
 
 
-def test_analysis_normalization_and_risk_score_floor(monkeypatch):
+def test_analysis_normalization_and_risk_score_floor():
     from app.api.v1.analysis import _get_or_run_analysis
 
     session = make_session(anonymized_text="A legal contract.", htoc_status="ready")
