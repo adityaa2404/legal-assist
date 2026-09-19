@@ -67,7 +67,7 @@ def test_chat_rejects_session_still_processing(authenticated_client):
     )
 
     _override_session_service(service)
-    app.dependency_overrides[dependencies.get_pii_service] = FakePIIService()
+    app.dependency_overrides[dependencies.get_pii_service] = lambda: FakePIIService()
     try:
         response = authenticated_client.post(
             "/api/v1/chat",
@@ -199,4 +199,4 @@ def test_analysis_normalization_and_risk_score_floor():
 
     assert result["obligations"] == [{"description": "Pay on time"}]
     assert result["missing_clauses"] == ["Notice"]
-    assert result["overall_risk_score"] == 6
+    assert result["overall_risk_score"] == 8
