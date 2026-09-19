@@ -62,10 +62,9 @@ def test_forced_worker_health_check_bypasses_cache(monkeypatch):
     async def fake_check_worker():
         nonlocal calls
         calls += 1
-        return calls > 1
+        return calls == 2
 
     monkeypatch.setattr(health_api, "_check_worker", fake_check_worker)
-    # Seed a fresh cached result so the forced call is the only one that hits the worker.
     monkeypatch.setitem(
         health_api._worker_status_cache,
         "checked_at",
@@ -73,9 +72,16 @@ def test_forced_worker_health_check_bypasses_cache(monkeypatch):
     )
     monkeypatch.setitem(health_api._worker_status_cache, "healthy", False)
 
-    assert asyncio.run(health_api.get_worker_status()) is False
-    assert asyncio.run(health_api.get_worker_status(force=True)) is True
-    assert calls == 2
+    async def exercise():
+        cached = await health_api.get_worker_status()
+        forced = await health_api.get_worker_status(force=True)
+        return cached, forced
+
+    cached, forced = asyncio.run(exercise())
+
+    assert cached is False
+    assert forced is True
+    assert calls == 1
 
 
 def test_worker_runs_without_celery_heartbeat():
