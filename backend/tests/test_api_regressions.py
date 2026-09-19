@@ -93,7 +93,7 @@ def test_chat_cached_response_is_deanonymized(authenticated_client):
     )
 
     _override_session_service(service)
-    app.dependency_overrides[dependencies.get_pii_service] = FakePIIService()
+    app.dependency_overrides[dependencies.get_pii_service] = lambda: FakePIIService()
     try:
         response = authenticated_client.post(
             "/api/v1/chat",
