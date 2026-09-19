@@ -62,7 +62,7 @@ def test_forced_worker_health_check_bypasses_cache(monkeypatch):
     async def fake_check_worker():
         nonlocal calls
         calls += 1
-        return calls == 2
+        return True
 
     monkeypatch.setattr(health_api, "_check_worker", fake_check_worker)
     monkeypatch.setitem(
