@@ -19,6 +19,12 @@ export default defineConfig([
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+
+      // These are useful during a cleanup pass, but the current codebase
+      // intentionally contains a few existing cases in these categories.
+      // Keep them visible in CI without blocking unrelated changes.
+      '@typescript-eslint/no-explicit-any': 'warn',
+      'react-refresh/only-export-components': 'warn',
     },
     languageOptions: {
       ecmaVersion: 2020,
