@@ -43,7 +43,8 @@ def test_worker_health_status_is_cached_between_checks(monkeypatch):
 
     monkeypatch.setattr(health_api, "_check_worker", fake_check_worker)
     monkeypatch.setattr(health_api.time, "monotonic", lambda: 100.0)
-    monkeypatch.setitem(health_api._worker_status_cache, "checked_at", 50.0)
+    # Force the first call to perform a real check; its result should then be cached.
+    monkeypatch.setitem(health_api._worker_status_cache, "checked_at", 0.0)
     monkeypatch.setitem(health_api._worker_status_cache, "healthy", False)
 
     assert asyncio.run(health_api.get_worker_status()) is True
@@ -61,7 +62,8 @@ def test_forced_worker_health_check_bypasses_cache(monkeypatch):
 
     monkeypatch.setattr(health_api, "_check_worker", fake_check_worker)
     monkeypatch.setattr(health_api.time, "monotonic", lambda: 100.0)
-    monkeypatch.setitem(health_api._worker_status_cache, "checked_at", 50.0)
+    # Seed a fresh cached result so the forced call is the only one that hits the worker.
+    monkeypatch.setitem(health_api._worker_status_cache, "checked_at", 100.0)
     monkeypatch.setitem(health_api._worker_status_cache, "healthy", False)
 
     assert asyncio.run(health_api.get_worker_status()) is False
