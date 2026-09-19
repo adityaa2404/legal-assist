@@ -146,29 +146,58 @@ def test_report_generation_is_idempotent_while_pending(authenticated_client, mon
     assert service.report_status_calls == 1
 
 
-def test_analysis_risk_score_floor_prevents_zero_for_real_risks():
-    # Exercise the same normalization logic used before the API model is built.
-    from app.api.v1.analysis import _normalize_result
+def test_analysis_normalization_and_risk_score_floor(monkeypatch):
+    from app.api.v1.analysis import _get_or_run_analysis
 
-    result = _normalize_result(
-        {
-            "summary": "summary",
-            "document_type": "contract",
-            "parties": [],
-            "key_clauses": [],
-            "risks": [
-                {
-                    "risk_title": "Termination",
-                    "severity": "high",
-                    "description": "Risk",
-                    "recommendation": "Review",
-                }
-            ],
-            "obligations": "Pay on time",
-            "missing_clauses": "Notice",
-            "overall_risk_score": 0,
-        }
+    session = make_session(anonymized_text="A legal contract.", htoc_status="ready")
+
+    class AnalysisSessionService:
+        async def get(self, session_id):
+            return session
+
+        async def get_analysis(self, session_id, analysis_type):
+            return None
+
+        async def save_analysis(self, session_id, analysis_type, result):
+            return None
+
+    class FakeGemini:
+        async def analyze_document(self, context, analysis_type, provider):
+            return {
+                "summary": "summary",
+                "document_type": "contract",
+                "parties": [],
+                "key_clauses": [],
+                "risks": [
+                    {
+                        "risk_title": "Termination",
+                        "severity": "high",
+                        "description": "Risk",
+                        "recommendation": "Review",
+                    }
+                ],
+                "obligations": "Pay on time",
+                "missing_clauses": "Notice",
+                "overall_risk_score": 0,
+            }
+
+    class IdentityPII:
+        def deanonymize_dict(self, result, mapping):
+            return result
+
+    import asyncio
+
+    result = asyncio.run(
+        _get_or_run_analysis(
+            SESSION_ID,
+            "full",
+            AnalysisSessionService(),
+            IdentityPII(),
+            FakeGemini(),
+            tree_search=None,
+        )
     )
 
     assert result["obligations"] == [{"description": "Pay on time"}]
     assert result["missing_clauses"] == ["Notice"]
+    assert result["overall_risk_score"] == 6
