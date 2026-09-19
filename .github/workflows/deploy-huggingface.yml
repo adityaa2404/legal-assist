@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/deploy-huggingface.yml"
   workflow_dispatch:
 
 permissions:
@@ -47,6 +51,7 @@ jobs:
 
   deploy-worker:
     name: Deploy Worker Space
+    needs: ci
     runs-on: ubuntu-latest
 
     env:
