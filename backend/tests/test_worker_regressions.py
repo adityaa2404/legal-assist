@@ -60,7 +60,6 @@ def test_process_document_soft_timeout_is_reported_as_failure(monkeypatch):
     fake_task = FakeTask()
     with pytest.raises(SoftTimeLimitExceeded):
         tasks.process_document.run(
-            fake_task,
             SESSION_ID,
             "application/pdf",
             "digital",
@@ -87,7 +86,6 @@ def test_build_htoc_bm25_soft_timeout_is_reported_as_failure(monkeypatch):
     fake_task = FakeTask()
     with pytest.raises(SoftTimeLimitExceeded):
         tasks.build_htoc_bm25.run(
-            fake_task,
             SESSION_ID,
             ["page"],
             "gemini",
@@ -106,8 +104,9 @@ def test_process_document_retries_transient_errors(monkeypatch):
     _install_worker_fakes(monkeypatch, session, fail)
 
     fake_task = FakeTask()
+    monkeypatch.setattr(tasks.process_document, "retry", fake_task.retry)
+
     result = tasks.process_document.run(
-        fake_task,
         SESSION_ID,
         "application/pdf",
         "digital",
@@ -133,7 +132,7 @@ def test_generate_report_failures_are_terminal(monkeypatch):
 
     fake_task = FakeTask()
     with pytest.raises(RuntimeError, match="render failed"):
-        tasks.generate_report.run(fake_task, SESSION_ID, "full")
+        tasks.generate_report.run(SESSION_ID, "full")
 
     assert session.report_statuses == [(SESSION_ID, "full", "failed")]
     assert fake_task.retry_calls == []
