@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     # GEMINI config
     GEMINI_API_KEY: str
+    JEV_API_KEY: Optional[str] = None
     GEMINI_HTOC_API_KEY: Optional[str] = None
     GEMINI_CHAT_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.6-flash"
