@@ -13,6 +13,8 @@ from app.core.dependencies import (
     get_current_user, get_tree_search,
 )
 from app.models.chat import ChatRequest, ChatResponse
+from app.core.config import settings
+from app.services.jev_client import classify_query_intent
 
 # Regex to detect incomplete PII tokens at the end of a chunk (e.g. "[PERS" or "[PERSON_1")
 _PARTIAL_TOKEN_RE = re.compile(r'\[[A-Z_0-9]*$')
@@ -116,6 +118,14 @@ async def _understand_query(query: str, gemini: GeminiClient, provider: str) -> 
             intent = "targeted"
         expanded = result.get("expanded_query") or query
         key_terms = result.get("key_terms") or []
+
+        # Jev handles only the bounded intent decision. Keep the LLM for legal
+        # synonym expansion and key-term extraction, and preserve its intent as
+        # a fallback if Jev is unconfigured or unavailable.
+        jev_intent = await classify_query_intent(query, settings.JEV_API_KEY)
+        if jev_intent:
+            intent = jev_intent
+
         return {"intent": intent, "expanded_query": expanded, "key_terms": key_terms}
     except Exception:
         return {"intent": "targeted", "expanded_query": query, "key_terms": []}
