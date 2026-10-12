@@ -18,6 +18,8 @@ class Settings(BaseSettings):
 
     # GEMINI config
     GEMINI_API_KEY: str
+    # Optional Codiv/OpenJev intent classification. Query expansion remains with Gemini.
+    TYPESAFE_API_KEY: Optional[str] = None
     GEMINI_HTOC_API_KEY: Optional[str] = None
     GEMINI_CHAT_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.6-flash"

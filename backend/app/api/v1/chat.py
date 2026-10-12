@@ -13,6 +13,8 @@ from app.core.dependencies import (
     get_current_user, get_tree_search,
 )
 from app.models.chat import ChatRequest, ChatResponse
+from app.core.config import settings
+from app.services.jev_client import classify_query_intent
 
 # Regex to detect incomplete PII tokens at the end of a chunk (e.g. "[PERS" or "[PERSON_1")
 _PARTIAL_TOKEN_RE = re.compile(r'\[[A-Z_0-9]*$')
@@ -83,13 +85,9 @@ def _get_bm25_service(session) -> BM25SearchService:
 
 async def _understand_query(query: str, gemini: GeminiClient, provider: str) -> dict:
     """
-    Single Gemini call (temp=0) that returns everything retrieval needs:
-    - intent: how much of the document to retrieve
-    - expanded_query: original query + legal synonyms, used as BM25 token input
-    - key_terms: priority tokens for HTOC section title matching
-
-    Replaces both the old intent classification call AND the embedding call.
-    One call, ~500ms, no vector dependency.
+    Gemini expands legal synonyms and extracts key terms. Codiv/OpenJev may
+    override only the bounded intent label; on failure, Gemini's intent remains
+    the fallback. This preserves the existing single Gemini query-preparation call.
     """
     prompt = (
         "You are a legal document search expert. Analyze this query and return a JSON object.\n\n"
@@ -116,6 +114,12 @@ async def _understand_query(query: str, gemini: GeminiClient, provider: str) -> 
             intent = "targeted"
         expanded = result.get("expanded_query") or query
         key_terms = result.get("key_terms") or []
+
+        # Codiv handles only intent; Gemini remains responsible for expansion/terms.
+        codiv_intent = await classify_query_intent(query, settings.TYPESAFE_API_KEY)
+        if codiv_intent:
+            intent = codiv_intent
+
         return {"intent": intent, "expanded_query": expanded, "key_terms": key_terms}
     except Exception:
         return {"intent": "targeted", "expanded_query": query, "key_terms": []}
@@ -301,7 +305,7 @@ async def chat_with_document_stream(
     """
     Streaming chat endpoint. Returns Server-Sent Events (SSE):
       - event: token      → data: {"text": "chunk of response"}
-      - event: sources    → data: {"source_sections": [...], "retrieval_confidence": "..."}
+      - event: sources    → data: {"source_sections": [...], "retrieval_confidence": "low"}
       - event: done       → data: {}
       - event: error      → data: {"error": "message"}
     """
