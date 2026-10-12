@@ -1,8 +1,8 @@
-""""Codiv/OpenJev adapter for bounded legal-query intent classification.
+'''Codiv/OpenJev adapter for bounded legal-query intent classification.
 
 Query expansion and key-term extraction remain with the existing Gemini call.
 Failures return None so the caller can retain Gemini's intent.
-"""
+'''
 import logging
 from typing import Any, Optional
 
